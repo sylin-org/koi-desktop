@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Koi</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="band">
+      <span class="lamp" id="lamp"></span>
+      <span id="band-word">waking</span>
+    </div>
+
+    <div class="pane">
+      <div class="card main" id="koi-card"
+           style="--argb: 96, 165, 250">
+        <span class="card-art">
+          <span class="mascot-halo"></span>
+          <img class="mascot" src="koi.png" alt="" width="96" height="96" />
+        </span>
+        <span class="card-divider"></span>
+        <span class="card-pane">
+          <span class="card-title">
+            <span class="name">Koi</span>
+            <span class="role">the local substrate</span>
+          </span>
+          <dl class="facts">
+            <div class="fact"><dt>Daemon</dt><dd id="f-daemon">…</dd></div>
+            <div class="fact"><dt>Posture</dt><dd id="f-posture">…</dd></div>
+            <div class="fact"><dt>Host</dt><dd id="f-host">…</dd></div>
+            <div class="fact"><dt>Version</dt><dd id="f-version">…</dd></div>
+          </dl>
+          <span class="card-foot">
+            <span class="flavor">&ldquo;It knows every stone in the pond by name.&rdquo;</span>
+          </span>
+        </span>
+        <span class="holo"></span>
+      </div>
+
+      <p class="hint">
+        The daemon serves everything on this machine. CLI, local web API, and
+        this workbench are three doors into the same pond.
+      </p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
