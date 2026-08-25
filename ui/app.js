@@ -554,17 +554,102 @@ if (window.__TAURI__?.event?.listen) {
   // Domain events: forwarded wire events (dns.*, certmesh.*, mdns.* …).
   window.__TAURI__.event.listen("daemon-event", (event) => {
     const payload = event.payload ?? {};
+    const kind = String(payload.kind ?? "");
     // A posture/certmesh event may have changed the level — pull once.
-    if (/certmesh|posture/.test(String(payload.kind))) { lastStatus = ""; refreshStatus(); }
-    dlog(`daemon-event: ${payload.kind}`);
+    if (/certmesh|posture/.test(kind)) { lastStatus = ""; refreshStatus(); }
+    // DNS changes push: the table re-reads instead of polling.
+    if (kind.startsWith("dns.")) loadDns();
+    dlog(`daemon-event: ${kind}`);
   });
 } else {
   dlog("tauri event API unavailable — falling back to reconcile-only");
 }
 
+// ── DNS pane: static records + ephemeral TXT ─────────────────────────
+const el2 = {};
+for (const id of [
+  "dns-name", "dns-ip", "dns-ttl", "dns-add", "dns-note", "dns-queue", "dns-count",
+  "txt-name", "txt-value", "txt-set", "txt-clear", "txt-note", "dns-refresh",
+]) el2[id] = document.getElementById(id);
+
+function dnsNote(node, text, isError) {
+  if (!node) return;
+  node.textContent = text || "";
+  node.className = "action-note" + (isError ? " error" : "");
+}
+
+async function dnsAct(noteEl, fn) {
+  dnsNote(noteEl, "Working…");
+  try {
+    await fn();
+    dnsNote(noteEl, "Done.");
+    await loadDns();
+  } catch (error) {
+    dnsNote(noteEl, String(error), true);
+  }
+}
+
+async function loadDns() {
+  let entries = [];
+  try {
+    const snap = await invoke("dns_entries");
+    entries = snap.entries ?? [];
+  } catch (error) {
+    dnsNote(el2["dns-note"], String(error), true);
+  }
+  const queue = el2["dns-queue"];
+  if (!queue) return;
+  queue.replaceChildren();
+  for (const e of entries) {
+    const node = document.createElement("div");
+    node.className = "row dns";
+    node.innerHTML =
+      `<div class="row-tool">${escapeHtml(e.name)}</div>` +
+      `<div class="row-client mono">${escapeHtml(e.ip)}</div>` +
+      `<div class="row-dur">${e.ttl != null ? escapeHtml(String(e.ttl)) : "default"}</div>` +
+      `<button class="row-remove" type="button">Remove</button>`;
+    node.querySelector(".row-remove")?.addEventListener("click", () => {
+      dnsAct(el2["dns-note"], () => invoke("dns_remove", { name: e.name }));
+    });
+    queue.append(node);
+  }
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No static records — add one above, or let discovery and the mesh derive names.";
+    queue.append(empty);
+  }
+  if (el2["dns-count"]) el2["dns-count"].textContent = `${entries.length} record${entries.length === 1 ? "" : "s"}`;
+}
+
+el2["dns-add"]?.addEventListener("click", () => {
+  const ttlRaw = el2["dns-ttl"].value.trim();
+  const ttl = ttlRaw === "" ? null : Number(ttlRaw);
+  if (ttlRaw !== "" && (!Number.isFinite(ttl) || ttl < 0)) {
+    dnsNote(el2["dns-note"], "TTL must be a non-negative number of seconds.", true);
+    return;
+  }
+  dnsAct(el2["dns-note"], async () => {
+    await invoke("dns_add", { name: el2["dns-name"].value, ip: el2["dns-ip"].value, ttl });
+    el2["dns-name"].value = "";
+    el2["dns-ip"].value = "";
+    el2["dns-ttl"].value = "";
+  });
+});
+el2["txt-set"]?.addEventListener("click", () => {
+  dnsAct(el2["txt-note"], () =>
+    invoke("dns_txt_set", { name: el2["txt-name"].value, value: el2["txt-value"].value }));
+});
+el2["txt-clear"]?.addEventListener("click", () => {
+  dnsAct(el2["txt-note"], () =>
+    invoke("dns_txt_clear", { name: el2["txt-name"].value, value: el2["txt-value"].value }));
+});
+el2["dns-refresh"]?.addEventListener("click", loadDns);
+
 armCard();
 startDiscover();
 invoke?.("status_events_start");
 refreshStatus();
+loadDns();
 // Safety net only: the stream is the driver; this catches missed pushes.
 setInterval(refreshStatus, 60000);

@@ -61,6 +61,11 @@ fn run() -> Result<()> {
                 discover_start,
                 discover_snapshot,
                 discover_ping,
+                dns_entries,
+                dns_add,
+                dns_remove,
+                dns_txt_set,
+                dns_txt_clear,
                 status_events_start,
                 debug_log
             ])
@@ -182,6 +187,86 @@ fn discover_ping() -> Result<serde_json::Value, String> {
         .into_string()
         .map_err(|e| format!("query response unreadable: {e}"))?;
     serde_json::from_str(&body).map_err(|e| format!("query response malformed: {e}"))
+}
+
+/// Authenticated daemon request: breadcrumb token attached, JSON body in/out.
+/// Mutations are DAT-gated server-side; reads stay loopback-exempt.
+fn daemon_json(
+    method: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let (endpoint, token) =
+        read_breadcrumb().ok_or("no daemon breadcrumb found — is Koi running?")?;
+    let mut request = match method {
+        "POST" => daemon_agent().post(format!("{endpoint}{path}").as_str()),
+        "PUT" => daemon_agent().put(format!("{endpoint}{path}").as_str()),
+        "DELETE" => daemon_agent().delete(format!("{endpoint}{path}").as_str()),
+        _ => daemon_agent().get(format!("{endpoint}{path}").as_str()),
+    };
+    if let Some(token) = &token {
+        request = request.set("x-koi-token", token);
+    }
+    let response = match body {
+        Some(body) => request
+            .send_json(body)
+            .map_err(|e| format!("{method} {path} failed: {e}"))?,
+        None => request.call().map_err(|e| format!("{path} failed: {e}"))?,
+    };
+    let text = response
+        .into_string()
+        .map_err(|e| format!("{path} unreadable: {e}"))?;
+    if text.trim().is_empty() {
+        return Ok(serde_json::json!({ "ok": true }));
+    }
+    serde_json::from_str(&text).map_err(|e| format!("{path} malformed: {e}"))
+}
+
+#[tauri::command]
+fn dns_entries() -> Result<serde_json::Value, String> {
+    daemon_json("GET", "/v1/dns/entries", None)
+}
+
+#[tauri::command]
+fn dns_add(name: String, ip: String, ttl: Option<u32>) -> Result<serde_json::Value, String> {
+    if name.trim().is_empty() || ip.trim().is_empty() {
+        return Err("A record needs both a name and an IP.".into());
+    }
+    daemon_json(
+        "POST",
+        "/v1/dns/add",
+        Some(serde_json::json!({ "name": name.trim(), "ip": ip.trim(), "ttl": ttl })),
+    )
+}
+
+#[tauri::command]
+fn dns_remove(name: String) -> Result<serde_json::Value, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A record name is required.".into());
+    }
+    daemon_json("DELETE", format!("/v1/dns/remove/{name}").as_str(), None)
+}
+
+#[tauri::command]
+fn dns_txt_set(name: String, value: String) -> Result<serde_json::Value, String> {
+    if name.trim().is_empty() || value.is_empty() {
+        return Err("A TXT record needs both a name and a value.".into());
+    }
+    daemon_json(
+        "PUT",
+        "/v1/dns/txt",
+        Some(serde_json::json!({ "name": name.trim(), "value": value })),
+    )
+}
+
+#[tauri::command]
+fn dns_txt_clear(name: String, value: String) -> Result<serde_json::Value, String> {
+    daemon_json(
+        "DELETE",
+        "/v1/dns/txt",
+        Some(serde_json::json!({ "name": name.trim(), "value": value })),
+    )
 }
 
 static DISCOVER_STARTED: AtomicBool = AtomicBool::new(false);

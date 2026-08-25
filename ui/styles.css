@@ -784,3 +784,18 @@ kbd { padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; col
 }
 .filter-input { width: 180px; }
 .sub { color: var(--muted); }
+
+/* ── DNS pane ── */
+.form-grid { display: grid; gap: 8px; align-items: end; flex: 1; }
+.form-grid.four { grid-template-columns: 1fr 1fr 110px auto; }
+@media (max-width: 820px) { .form-grid.four { grid-template-columns: 1fr 1fr; } }
+.field { display: grid; gap: 4px; }
+.field .kicker { display: block; }
+.filter-input.wide { width: 100%; }
+.row.dns { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 90px 110px; }
+.row.dns .row-remove {
+  border: 1px solid rgba(248, 113, 113, .3); border-radius: 6px;
+  color: #fecaca; background: transparent; cursor: pointer;
+  font-size: 11px; padding: 3px 9px;
+}
+.row.dns .row-remove:hover { border-color: rgba(248, 113, 113, .55); background: rgba(248, 113, 113, .08); }

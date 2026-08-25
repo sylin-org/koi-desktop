@@ -21,12 +21,63 @@
 
       <nav class="tabs" aria-label="Koi">
         <button class="tab active" type="button" data-view="discover" aria-current="page">Discover</button>
+        <button class="tab" type="button" data-view="dns">DNS</button>
         <button class="tab" type="button" data-view="status">Status</button>
         <button class="tab" type="button" data-view="about">About</button>
       </nav>
     </header>
 
     <main id="main-content">
+    <!-- ── DNS ────────────────────────────────────────────────────── -->
+    <section class="view" id="view-dns" data-page="dns" aria-label="DNS">
+      <div class="page-heading">
+        <div>
+          <span class="kicker">Names this machine serves on the LAN</span>
+          <h1>DNS</h1>
+          <p>Static records answer on port 53 alongside everything discovery and the mesh derive.</p>
+        </div>
+        <button class="ghost-button" type="button" id="dns-refresh">Refresh</button>
+      </div>
+
+      <article class="strip">
+        <div class="form-grid four">
+          <label class="field"><span class="kicker">Name</span>
+            <input id="dns-name" class="filter-input wide" placeholder="app.internal" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field"><span class="kicker">IP</span>
+            <input id="dns-ip" class="filter-input wide" placeholder="10.0.0.5" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field"><span class="kicker">TTL (s)</span>
+            <input id="dns-ttl" class="filter-input wide" placeholder="optional" autocomplete="off" spellcheck="false" />
+          </label>
+          <button class="ghost-button" type="button" id="dns-add">Add record</button>
+        </div>
+      </article>
+      <p class="action-note" id="dns-note"></p>
+
+      <div class="queue-head" style="margin-top: 18px;">
+        <span>Static records</span>
+        <span id="dns-count" style="color: var(--muted); font: 400 11px/1 var(--mono);"></span>
+      </div>
+      <div class="queue" id="dns-queue"></div>
+
+      <article class="strip" style="margin-top: 26px;">
+        <div class="form-grid four">
+          <label class="field"><span class="kicker">TXT name</span>
+            <input id="txt-name" class="filter-input wide" placeholder="app.internal" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field"><span class="kicker">TXT value</span>
+            <input id="txt-value" class="filter-input wide" placeholder="ephemeral value" autocomplete="off" spellcheck="false" />
+          </label>
+          <button class="ghost-button" type="button" id="txt-set">Publish</button>
+          <button class="danger-button" type="button" id="txt-clear">Clear</button>
+        </div>
+      </article>
+      <p class="action-note" id="txt-note"></p>
+      <p class="about-note">Ephemeral TXT records are in-memory only — the ACME dns-01 mechanism
+        uses them; they never touch disk and vanish with the daemon.</p>
+    </section>
+
     <!-- ── Discover ───────────────────────────────────────────────── -->
     <section class="view active" id="view-discover" data-page="discover" aria-label="Discover">
       <div class="page-heading">
