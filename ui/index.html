@@ -8,42 +8,106 @@
 </head>
 <body>
   <div class="app-shell">
-    <div class="band">
-      <span class="lamp" id="lamp"></span>
-      <span id="band-word">waking</span>
-    </div>
-
-    <div class="pane">
-      <div class="card main" id="koi-card"
-           style="--argb: 96, 165, 250">
-        <span class="card-art">
-          <span class="mascot-halo"></span>
-          <img class="mascot" src="koi.png" alt="" width="96" height="96" />
-        </span>
-        <span class="card-divider"></span>
-        <span class="card-pane">
-          <span class="card-title">
-            <span class="name">Koi</span>
-            <span class="role">the local substrate</span>
-          </span>
-          <dl class="facts">
-            <div class="fact"><dt>Daemon</dt><dd id="f-daemon">…</dd></div>
-            <div class="fact"><dt>Posture</dt><dd id="f-posture">…</dd></div>
-            <div class="fact"><dt>Host</dt><dd id="f-host">…</dd></div>
-            <div class="fact"><dt>Version</dt><dd id="f-version">…</dd></div>
-          </dl>
-          <span class="card-foot">
-            <span class="flavor">&ldquo;It knows every stone in the pond by name.&rdquo;</span>
-          </span>
-        </span>
-        <span class="holo"></span>
+    <header class="lampband">
+      <div class="lamp" id="lamp">
+        <span class="lamp-halo" aria-hidden="true"></span>
+        <span class="lamp-core" aria-hidden="true"></span>
       </div>
 
-      <p class="hint">
-        The daemon serves everything on this machine. CLI, local web API, and
-        this workbench are three doors into the same pond.
-      </p>
-    </div>
+      <div class="state">
+        <span class="state-word" id="state-word">Starting</span>
+        <span class="state-facts" id="state-facts"></span>
+      </div>
+
+      <nav class="tabs" aria-label="Koi">
+        <button class="tab active" type="button" data-view="status" aria-current="page">Status</button>
+        <button class="tab" type="button" data-view="about">About</button>
+      </nav>
+    </header>
+
+    <main id="main-content">
+    <!-- ── Status ─────────────────────────────────────────────────── -->
+    <section class="view active" id="view-status" data-page="status" aria-label="Status">
+      <div style="padding: 26px 40px;">
+        <div class="page-heading">
+          <div>
+            <span class="kicker">Local diagnostics and control</span>
+            <h1 id="status-heading">Status</h1>
+            <p>Whether the Koi daemon is running on this machine, and what it is serving.</p>
+          </div>
+          <button class="ghost-button" type="button" id="refresh-status">Refresh</button>
+        </div>
+
+        <article class="strip" id="service-strip">
+          <div>
+            <h2 id="service-state">Service not running</h2>
+            <p id="service-detail">The daemon is not installed or not running on this machine.</p>
+          </div>
+          <div class="strip-actions">
+            <button class="ghost-button" type="button" id="btn-start">Start service</button>
+            <button class="ghost-button" type="button" id="btn-run-once">Run once</button>
+            <button class="danger-button" type="button" id="btn-stop">Stop</button>
+          </div>
+        </article>
+        <p class="action-note" id="action-note"></p>
+
+        <div class="card-grid" id="diagnostic-grid">
+          <div class="tile"><h3>HTTP surface</h3><p id="t-http">checking&hellip;</p></div>
+          <div class="tile"><h3>Posture</h3><p id="t-posture">checking&hellip;</p></div>
+          <div class="tile"><h3>Version</h3><p class="mono" id="t-version">&hellip;</p></div>
+          <div class="tile"><h3>Data root</h3><p class="mono">%ProgramData%\koi</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── About ──────────────────────────────────────────────────── -->
+    <section class="view" id="view-about" data-page="about" aria-label="About">
+      <main class="about">
+        <div class="tcg" id="koi-card"
+             style="--argb: 96, 165, 250"
+             role="img" aria-label="Koi, the local substrate">
+          <span class="card-art">
+            <span class="mascot-halo" aria-hidden="true"></span>
+            <img class="mascot-echo px" src="koi.png" alt="" aria-hidden="true" width="300" height="300">
+            <img class="px mascot" src="koi.png" alt="" width="200" height="200">
+          </span>
+          <span class="card-divider"></span>
+          <span class="card-disc"><span class="ver" id="card-version">1.0</span></span>
+          <span class="card-notch"></span>
+          <span class="card-pane">
+            <span class="card-title"><span class="name">Koi</span><span class="role">&middot; the local substrate</span></span>
+            <span class="card-body">
+              <span class="orbs">
+                <span class="orb" title="Network" style="color:#60a5fa"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"></circle><circle cx="5.5" cy="18" r="2.2"></circle><circle cx="18.5" cy="18" r="2.2"></circle><path d="M12 7.2v1.8M11.2 10.6 6.7 15.8M12.8 10.6 17.3 15.8"></path></svg></span>
+                <span class="orb" title="Trust" style="color:#5eead4"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6z"></path><path d="M9.4 12l1.9 1.9L15 10"></path></svg></span>
+              </span>
+              <span class="card-rules">Let containers, applications and devices find, trust and talk
+                across your private network.</span>
+            </span>
+            <span class="card-foot"><span class="flavor">&ldquo;It knows every stone in the pond by name.&rdquo;</span></span>
+          </span>
+          <span class="holo" aria-hidden="true"></span>
+          <span class="holo2" aria-hidden="true"></span>
+        </div>
+
+        <div class="about-copy">
+          <h1>Koi</h1>
+          <p class="about-lede">A local connectivity substrate for the machines you own.
+            It runs on this machine, serves your LAN, and stops where you tell it to.</p>
+
+          <dl class="about-facts">
+            <dt>Daemon</dt><dd id="f-daemon">checking&hellip;</dd>
+            <dt>Posture</dt><dd id="f-posture">checking&hellip;</dd>
+            <dt>Host</dt><dd id="f-host">&hellip;</dd>
+            <dt>Version</dt><dd id="f-version">&hellip;</dd>
+          </dl>
+
+          <p class="about-note">Koi never phones home. No telemetry, no update ping.
+            Everything on this page was assembled on this device from work this device did.</p>
+        </div>
+      </main>
+    </section>
+    </main>
   </div>
 
   <script src="app.js"></script>
