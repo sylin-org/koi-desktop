@@ -20,14 +20,53 @@
       </div>
 
       <nav class="tabs" aria-label="Koi">
-        <button class="tab active" type="button" data-view="status" aria-current="page">Status</button>
+        <button class="tab active" type="button" data-view="discover" aria-current="page">Discover</button>
+        <button class="tab" type="button" data-view="status">Status</button>
         <button class="tab" type="button" data-view="about">About</button>
       </nav>
     </header>
 
     <main id="main-content">
+    <!-- ── Discover ───────────────────────────────────────────────── -->
+    <section class="view active" id="view-discover" data-page="discover" aria-label="Discover">
+      <div class="page-heading">
+        <div>
+          <span class="kicker">Live mDNS discovery on your LAN</span>
+          <h1>Discover</h1>
+          <p>Everything announcing itself on this network right now, as it happens.</p>
+        </div>
+        <button class="ghost-button" type="button" id="ping-pond">Ping the pond</button>
+        <button class="ghost-button" type="button" id="refresh-discover">Reconnect</button>
+      </div>
+
+      <div class="card-grid">
+        <div class="tile"><h3>Stream</h3><p id="t-stream">connecting&hellip;</p></div>
+        <div class="tile"><h3>Live now</h3><p class="mono" id="t-live">&hellip;</p></div>
+        <div class="tile"><h3>Service types</h3><p class="mono" id="t-types">&hellip;</p></div>
+        <div class="tile"><h3>Remembered</h3><p class="mono" id="t-remembered">&hellip;</p></div>
+      </div>
+
+      <div class="queue-head" style="margin-top: 20px;">
+        <span>Inhabitants of this network</span>
+        <div class="queue-actions">
+          <select id="discover-type" class="filter-select">
+            <option value="">All types</option>
+          </select>
+          <select id="discover-state" class="filter-select">
+            <option value="">Live + remembered</option>
+            <option value="live">Live only</option>
+            <option value="gone">Gone only</option>
+          </select>
+          <input id="discover-filter" type="search" class="filter-input" placeholder="Filter…"
+                 autocomplete="off" spellcheck="false" />
+          <span id="discover-count"></span>
+        </div>
+      </div>
+      <div class="queue" id="discover-queue"></div>
+    </section>
+
     <!-- ── Status ─────────────────────────────────────────────────── -->
-    <section class="view active" id="view-status" data-page="status" aria-label="Status">
+    <section class="view" id="view-status" data-page="status" aria-label="Status">
       <div style="padding: 26px 40px;">
         <div class="page-heading">
           <div>

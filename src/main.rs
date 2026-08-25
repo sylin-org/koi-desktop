@@ -20,7 +20,7 @@ use anyhow::Result;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, RunEvent, WebviewWindowBuilder, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WebviewWindowBuilder, WindowEvent};
 
 const MAIN_WINDOW: &str = "main";
 const DAEMON_ORIGIN: &str = "http://127.0.0.1:5641";
@@ -56,7 +56,13 @@ fn run() -> Result<()> {
                 service_status,
                 service_start,
                 service_stop,
-                daemon_run_once
+                daemon_run_once,
+                daemon_status,
+                discover_start,
+                discover_snapshot,
+                discover_ping,
+                status_events_start,
+                debug_log
             ])
             .setup(move |app| {
                 match build_tray(app) {
@@ -108,7 +114,276 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-// ── commands: the Status page's hands ─────────────────────────────────
+// ── daemon transport: Rust owns every network byte (the Ghostlight rule).
+// The webview never fetches cross-origin; WebView2's network stack eats
+// loopback requests unpredictably, so the shell proxies the loopback API.
+
+fn daemon_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(3))
+        .build()
+}
+
+#[tauri::command]
+fn daemon_status() -> Result<serde_json::Value, String> {
+    let agent = daemon_agent();
+    let mut out = serde_json::json!({ "up": false, "version": null, "posture": null });
+    if let Ok(body) = agent
+        .get(format!("{DAEMON_ORIGIN}/v1/status").as_str())
+        .call()
+        .and_then(|r| r.into_string().map_err(|e| e.into()))
+    {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+            out["up"] = serde_json::Value::Bool(true);
+            out["version"] = v["version"].clone();
+        }
+    }
+    if out["up"] == serde_json::Value::Bool(true) {
+        if let Ok(body) = agent
+            .get(format!("{DAEMON_ORIGIN}/v1/certmesh/posture").as_str())
+            .call()
+            .and_then(|r| r.into_string().map_err(|e| e.into()))
+        {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                out["posture"] = v["level"].clone();
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+fn discover_snapshot() -> Result<serde_json::Value, String> {
+    let response = daemon_agent()
+        .get(format!("{DAEMON_ORIGIN}/v1/mdns/browser/snapshot").as_str())
+        .call()
+        .map_err(|e| format!("snapshot unavailable: {e}"))?;
+    let body = response
+        .into_string()
+        .map_err(|e| format!("snapshot unreadable: {e}"))?;
+    serde_json::from_str(&body).map_err(|e| format!("snapshot malformed: {e}"))
+}
+
+/// "Ping the pond": force the daemon's mDNS query burst so every client on the
+/// LAN answers immediately. The endpoint is DAT-gated (a POST); the breadcrumb
+/// carries the token, exactly like the CLI.
+#[tauri::command]
+fn discover_ping() -> Result<serde_json::Value, String> {
+    let (_, token) = read_breadcrumb().ok_or("no daemon breadcrumb found — is Koi running?")?;
+    let mut request = daemon_agent()
+        .post(format!("{DAEMON_ORIGIN}/v1/mdns/browser/query").as_str());
+    if let Some(token) = &token {
+        request = request.set("x-koi-token", token);
+    }
+    let response = request
+        .send_json(serde_json::json!({}))
+        .map_err(|e| format!("query burst failed: {e}"))?;
+    let body = response
+        .into_string()
+        .map_err(|e| format!("query response unreadable: {e}"))?;
+    serde_json::from_str(&body).map_err(|e| format!("query response malformed: {e}"))
+}
+
+static DISCOVER_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Breadcrumb: the daemon's two-line discovery file (endpoint + DAT). The
+/// workbench reads it exactly like the CLI does.
+fn read_breadcrumb() -> Option<(String, Option<String>)> {
+    #[cfg(windows)]
+    let path = {
+        let program_data = std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into());
+        std::path::PathBuf::from(program_data).join("koi").join("koi.endpoint")
+    };
+    #[cfg(not(windows))]
+    let path = std::path::PathBuf::from("/var/run/koi.endpoint");
+    let body = std::fs::read_to_string(path).ok()?;
+    let mut lines = body.lines();
+    let endpoint = lines.next()?.trim().to_owned();
+    if endpoint.is_empty() {
+        return None;
+    }
+    let token = lines
+        .next()
+        .and_then(|l| l.trim().strip_prefix("dat:").map(str::to_owned));
+    Some((endpoint, token))
+}
+
+fn fetch_status_value(agent: &ureq::Agent, endpoint: &str) -> serde_json::Value {
+    let mut out = serde_json::json!({ "up": true, "version": null, "posture": null });
+    if let Ok(body) = agent
+        .get(format!("{endpoint}/v1/status").as_str())
+        .call()
+        .and_then(|r| r.into_string().map_err(|e| e.into()))
+    {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+            out["version"] = v["version"].clone();
+        }
+    }
+    if let Ok(body) = agent
+        .get(format!("{endpoint}/v1/certmesh/posture").as_str())
+        .call()
+        .and_then(|r| r.into_string().map_err(|e| e.into()))
+    {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+            out["posture"] = v["level"].clone();
+        }
+    }
+    out
+}
+
+fn emit_down_status(app: &tauri::AppHandle) {
+    let _ = app.emit(
+        "daemon-status",
+        serde_json::json!({ "up": false, "version": null, "posture": null }),
+    );
+}
+
+static STATUS_STREAM_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// The lamp rides the daemon's unified SSE stream (`/v1/events`, DAT-gated):
+/// connect → push a fresh status; heartbeat → refresh; any event → forward.
+/// No polling anywhere in the loop; reconnects with backoff when it drops.
+#[tauri::command]
+fn status_events_start(app: tauri::AppHandle) -> Result<(), String> {
+    if STATUS_STREAM_STARTED.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    std::thread::spawn(move || {
+        let agent = daemon_agent();
+        loop {
+            let Some((endpoint, token)) = read_breadcrumb() else {
+                emit_down_status(&app);
+                std::thread::sleep(Duration::from_secs(3));
+                continue;
+            };
+            let mut request = agent.get(format!("{endpoint}/v1/events").as_str());
+            if let Some(token) = &token {
+                request = request.set("x-koi-token", token);
+            }
+            match request.call() {
+                Ok(response) => {
+                    let _ = app.emit("daemon-status", fetch_status_value(&agent, &endpoint));
+                    let mut reader = std::io::BufReader::new(response.into_reader());
+                    let mut kind = String::new();
+                    let mut data = String::new();
+                    loop {
+                        let mut line = String::new();
+                        match std::io::BufRead::read_line(&mut reader, &mut line) {
+                            Ok(0) => break,
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                        let line = line.trim_end();
+                        if let Some(k) = line.strip_prefix("event:") {
+                            kind = k.trim().to_owned();
+                        } else if let Some(d) = line.strip_prefix("data:") {
+                            data.push_str(d.trim());
+                        } else if line.is_empty() {
+                            if kind == "heartbeat" {
+                                let _ = app.emit("daemon-status", fetch_status_value(&agent, &endpoint));
+                            } else if !kind.is_empty() {
+                                let parsed: Option<serde_json::Value> =
+                                    if data.is_empty() { None } else { serde_json::from_str(&data).ok() };
+                                let _ = app.emit(
+                                    "daemon-event",
+                                    serde_json::json!({ "kind": kind, "data": parsed }),
+                                );
+                            }
+                            kind.clear();
+                            data.clear();
+                        }
+                    }
+                }
+                Err(_) => emit_down_status(&app),
+            }
+            // Stream dropped or daemon absent; try again shortly.
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    });
+    Ok(())
+}
+
+/// One Rust-side SSE reader keeps the daemon's browse session alive and
+/// forwards every event to the webview. Reconnects forever with backoff.
+#[tauri::command]
+fn discover_start(app: tauri::AppHandle) -> Result<(), String> {
+    if DISCOVER_STARTED.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    std::thread::spawn(move || {
+        let agent = daemon_agent();
+        loop {
+            match agent
+                .get(format!("{DAEMON_ORIGIN}/v1/mdns/browser/events").as_str())
+                .call()
+            {
+                Ok(response) => {
+                    let mut reader = std::io::BufReader::new(response.into_reader());
+                    let mut kind = String::new();
+                    let mut data = String::new();
+                    loop {
+                        let mut line = String::new();
+                        match std::io::BufRead::read_line(&mut reader, &mut line) {
+                            Ok(0) => break,
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                        let line = line.trim_end();
+                        if let Some(k) = line.strip_prefix("event:") {
+                            kind = k.trim().to_owned();
+                        } else if let Some(d) = line.strip_prefix("data:") {
+                            data.push_str(d.trim());
+                        } else if line.is_empty() {
+                            if !kind.is_empty() {
+                                let parsed: Option<serde_json::Value> =
+                                    if data.is_empty() { None } else { serde_json::from_str(&data).ok() };
+                                let _ = app.emit(
+                                    "mdns-event",
+                                    serde_json::json!({ "kind": kind, "data": parsed }),
+                                );
+                            }
+                            kind.clear();
+                            data.clear();
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
+            // The daemon is down or the stream dropped; try again shortly.
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    });
+    Ok(())
+}
+
+/// Debug sink: the workbench's own console, on disk, so a headless session can
+/// diagnose the webview. Milestones + errors only; safe to remove later.
+#[tauri::command]
+fn debug_log(message: String) {
+    let dir = std::env::var("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("Koi");
+    let _ = std::fs::create_dir_all(&dir);
+    let line = format!(
+        "[{}] {}\n",
+        chrono_like_timestamp(),
+        message.replace('\n', " | ")
+    );
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("workbench-debug.log"))
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+}
+
+fn chrono_like_timestamp() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{now}s")
+}
 
 #[derive(Serialize)]
 struct ServiceStatus {

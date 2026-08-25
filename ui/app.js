@@ -1,17 +1,21 @@
-// Koi workbench: Status + About. Pure layers hold no document; only this
-// composition root touches the DOM.
+// Koi workbench: Status + About + Discover.
+// Transport rule (the Ghostlight rule): the webview holds no network. Every
+// daemon byte crosses via Tauri commands; live events arrive as `mdns-event`.
+// Pure layers hold no document; only this composition root touches the DOM.
 
 const DAEMON_ORIGIN = "http://127.0.0.1:5641";
-const POLL_MS = 5000;
 
 const invoke = window.__TAURI__?.core?.invoke;
 
-// ── transport ────────────────────────────────────────────────────────
-async function getJson(path) {
-  const response = await fetch(DAEMON_ORIGIN + path, { cache: "no-store" });
-  if (!response.ok) throw new Error("http " + response.status);
-  return response.json();
+// ── debug sink: milestones + every failure path, to disk via Rust ────
+function dlog(message) {
+  try { invoke?.("debug_log", { message }); } catch {}
 }
+window.addEventListener("error", (e) => dlog(`JS error: ${e.message} @ ${e.filename}:${e.lineno}`));
+window.addEventListener("unhandledrejection", (e) => dlog(`unhandled rejection: ${e.reason}`));
+window.addEventListener("securitypolicyviolation", (e) =>
+  dlog(`CSP blocked: ${e.violatedDirective} ${e.blockedURI} (source ${e.sourceFile ?? ""}:${e.lineNumber ?? ""})`));
+dlog("workbench booted");
 
 function postureWord(level) {
   switch (level) {
@@ -22,65 +26,52 @@ function postureWord(level) {
   }
 }
 
+function escapeHtml(text) {
+  return String(text ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
 // ── composition root ─────────────────────────────────────────────────
 const el = {};
 for (const id of [
   "lamp", "state-word", "state-facts",
   "service-state", "service-detail", "btn-start", "btn-run-once", "btn-stop", "action-note",
   "t-http", "t-posture", "t-version",
+  "t-stream", "t-types", "t-instances", "discover-queue", "discover-count",
   "koi-card", "card-version", "f-daemon", "f-posture", "f-host", "f-version",
 ]) el[id] = document.getElementById(id);
 
 let lastSignature = "";
-let lastService = { installed: false, running: false };
 
 function setFact(node, text, tone) {
+  if (!node) return;
   node.textContent = text;
   node.className = tone || "";
 }
 
 function note(text, isError) {
+  if (!el["action-note"]) return;
   el["action-note"].textContent = text || "";
   el["action-note"].className = "action-note" + (isError ? " error" : "");
 }
 
-async function tick() {
-  let service = null;
-  if (invoke) {
-    try { service = await invoke("service_status"); } catch { service = null; }
-  }
-  const svc = service || { installed: false, running: false, detail: "" };
-  lastService = svc;
+// ── Status + About facts — event-driven via the daemon's /v1/events ──
+let lastStatus = null;
 
-  let snapshot;
-  try {
-    const [status, posture] = await Promise.all([
-      getJson("/v1/status").catch(() => null),
-      getJson("/v1/certmesh/posture").catch(() => null),
-    ]);
-    const raw = status && status.version ? String(status.version) : null;
-    snapshot = {
-      up: true,
-      level: posture && posture.level ? postureWord(posture.level) : "—",
-      version: raw || "—",
-      short: raw ? raw.split(".").slice(0, 2).join(".") : "1.0",
-    };
-  } catch {
-    snapshot = { up: false, level: "offline", version: "—", short: "—" };
-  }
-
-  const signature = JSON.stringify([snapshot, svc]);
-  if (signature === lastSignature) return;
-  lastSignature = signature;
+function applyStatus(snap, svc) {
+  const up = snap.up === true;
+  const level = snap.posture ? postureWord(snap.posture) : "—";
+  const version = snap.version ? String(snap.version) : "—";
 
   // header lamp — Ghostlight drives states through body classes
-  document.body.classList.toggle("runtime-offline", !snapshot.up);
-  el["state-word"].textContent = snapshot.up ? "Calm waters" : "Quiet pond";
-  el["state-facts"].textContent = snapshot.up
-    ? `http ${DAEMON_ORIGIN.replace("http://", "")} · posture ${snapshot.level}`
+  document.body.classList.toggle("runtime-offline", !up);
+  el["state-word"].textContent = up ? "Calm waters" : "Quiet pond";
+  el["state-facts"].textContent = up
+    ? "http 127.0.0.1:5641 · posture " + level
     : "no daemon on this machine";
 
-  // service strip — truthful about which shape exists and who may act
+  // service strip
   el["service-state"].textContent = svc.running
     ? "Service running"
     : svc.installed ? "Service installed but stopped" : "Service not running";
@@ -94,16 +85,31 @@ async function tick() {
   el["btn-run-once"].disabled = false;
 
   // diagnostic tiles
-  setFact(el["t-http"], snapshot.up ? `serving at ${DAEMON_ORIGIN}` : "no listener on 5641",
-    snapshot.up ? "ok" : "down");
-  setFact(el["t-posture"], snapshot.level, snapshot.up ? "" : "down");
-  setFact(el["t-version"], snapshot.version);
+  setFact(el["t-http"], up ? "serving at http://127.0.0.1:5641" : "no listener on 5641", up ? "ok" : "down");
+  setFact(el["t-posture"], level, up ? "" : "down");
+  setFact(el["t-version"], version);
 
   // about facts mirror
-  setFact(el["f-daemon"], snapshot.up ? "running" : "not running", snapshot.up ? "ok" : "down");
-  setFact(el["f-posture"], snapshot.level, snapshot.up ? "ok" : "down");
-  setFact(el["f-version"], snapshot.version);
-  el["card-version"].textContent = snapshot.short;
+  setFact(el["f-daemon"], up ? "running" : "not running", up ? "ok" : "down");
+  setFact(el["f-posture"], level, up ? "ok" : "down");
+  setFact(el["f-version"], version);
+  el["card-version"].textContent = version !== "—" ? version.split(".").slice(0, 2).join(".") : "—";
+}
+
+async function refreshStatus() {
+  let snap;
+  try {
+    snap = await invoke("daemon_status");
+  } catch (error) {
+    dlog(`daemon_status failed: ${error}`);
+    snap = { up: false, version: null, posture: null };
+  }
+  let svc = { installed: false, running: false };
+  try { svc = await invoke("service_status"); } catch {}
+  const signature = JSON.stringify([snap, svc]);
+  if (signature === lastStatus) return;
+  lastStatus = signature;
+  applyStatus(snap, svc);
 }
 
 // ── service actions ──────────────────────────────────────────────────
@@ -117,14 +123,14 @@ async function act(name) {
   } catch (error) {
     note(String(error), true);
   }
-  lastSignature = ""; // force repaint on next tick
-  tick();
+  lastStatus = "";
+  refreshStatus();
 }
 
 el["btn-start"]?.addEventListener("click", () => act("service_start"));
 el["btn-stop"]?.addEventListener("click", () => act("service_stop"));
 el["btn-run-once"]?.addEventListener("click", () => act("daemon_run_once"));
-document.getElementById("refresh-status")?.addEventListener("click", () => { lastSignature = ""; tick(); });
+document.getElementById("refresh-status")?.addEventListener("click", () => { lastStatus = ""; refreshStatus(); });
 
 // ── tabs ─────────────────────────────────────────────────────────────
 for (const tab of document.querySelectorAll(".tab")) {
@@ -135,6 +141,386 @@ for (const tab of document.querySelectorAll(".tab")) {
     }
     for (const view of document.querySelectorAll(".view")) {
       view.classList.toggle("active", view.dataset.page === tab.dataset.view);
+    }
+  });
+}
+
+// ── Discover: inhabitants of the network ─────────────────────────────
+// The workbench is the memory: the daemon's browser cache evicts, we don't.
+// An instance is live (fresh announcement), fading (aging), or gone (kept,
+// dimmed, reviving the moment it re-announces).
+
+const instances = new Map(); // key → record {type,name,instance,host,ip,port,txt,resolved,seenAt,lastAnnounce,gone}
+const groupNodes = new Map(); // groupKey → {header, rows: Map(rowKey → node)}
+const typeLabels = new Map(); // service_type → {label, description}
+let streamState = "connecting";
+let discoverFilter = "";
+let typeFilter = "";
+let stateFilter = "";
+
+const LIVE_MS = 90 * 1000;
+const FADING_MS = 10 * 60 * 1000;
+const FAMILY = /(koi|moss|zen-?garden|ghostlight|sylin|koan)/i;
+
+function key(record) {
+  return `${record.service_type} ${record.name}`;
+}
+
+function friendlyName(r) {
+  const txt = r.txt ?? {};
+  return txt.fn || txt.ty || txt.md || txt.model || txt.am || "";
+}
+
+function deviceOf(r) {
+  const host = (r.host || "").replace(/\.$/, "");
+  if (host) return host;
+  // instance base: strip the trailing .<type>.local. tail the daemon may carry
+  return String(r.instance_name || r.name || "unknown").split(".")[0] || "unknown";
+}
+
+function presence(r) {
+  if (r.gone) return "gone";
+  const age = Date.now() - (r.seenAt ?? 0);
+  if (age < LIVE_MS) return "live";
+  if (age < FADING_MS) return "fading";
+  return "gone";
+}
+
+function isFamily(r) {
+  return FAMILY.test(`${r.instance_name || ""} ${r.name} ${r.service_type} ${r.host || ""}`);
+}
+
+function typeLabel(t) {
+  const meta = typeLabels.get(t);
+  return meta?.label || shortType(t);
+}
+
+function shortType(t) {
+  return String(t ?? "").replace(/^_/, "").replace(/\._tcp$/, "").replace(/\._udp$/, "");
+}
+
+function agoText(ts) {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 5) return "now";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
+function passesFilters(r) {
+  if (typeFilter && r.service_type !== typeFilter) return false;
+  const p = presence(r);
+  if (stateFilter === "live" && p !== "live") return false;
+  if (stateFilter === "gone" && p !== "gone") return false;
+  if (discoverFilter) {
+    const hay = `${r.instance_name || ""} ${r.name} ${r.service_type} ${r.host || ""} ${r.ip || ""} ${friendlyName(r)}`.toLowerCase();
+    if (!hay.includes(discoverFilter)) return false;
+  }
+  return true;
+}
+
+function upsertInstance(record) {
+  const k = key(record);
+  const existing = instances.get(k);
+  const next = {
+    ...existing,
+    ...record,
+    txt: { ...(existing?.txt ?? {}), ...(record.txt ?? {}) },
+    seenAt: Date.now(),
+    gone: false,
+  };
+  instances.set(k, next);
+  renderGroupFor(next);
+  updateDiscoverTiles();
+  refreshTypeDropdown();
+}
+
+function markGone(evt) {
+  const k = `${evt.service_type} ${evt.name}`;
+  const r = instances.get(k);
+  if (!r) return; // never seen here; nothing to remember
+  r.gone = true;
+  r.goneAt = Date.now();
+  renderGroupFor(r);
+}
+
+function instanceRowKey(r) {
+  return `${deviceOf(r)} :: ${key(r)}`;
+}
+
+function rowMarkup(r) {
+  const p = presence(r);
+  const endpoint = r.resolved
+    ? `${(r.host || r.ip || "?").replace(/\.$/, "")}:${r.port ?? ""}`
+    : `${(r.ip || "").trim() || "—"}`;
+  const friendly = friendlyName(r);
+  return (
+    `<div class="med-mini${isFamily(r) ? " family" : ""}">◆</div>` +
+    `<div class="row-tool">${escapeHtml(typeLabel(r.service_type))}</div>` +
+    `<div class="row-activity">${escapeHtml(r.instance_name || r.name)}${friendly ? ` <span class="sub">· ${escapeHtml(friendly)}</span>` : ""}</div>` +
+    `<div class="row-client">${escapeHtml(endpoint)}</div>` +
+    `<div class="row-dur">${escapeHtml(agoText(r.seenAt ?? Date.now()))}</div>` +
+    `<div class="row-cap">${escapeHtml(p)}</div>`
+  );
+}
+
+function rowClass(r) {
+  const p = presence(r);
+  let cls = `row discover ${p}`;
+  if (isFamily(r)) cls += " family";
+  return cls;
+}
+
+function buildRow(r) {
+  const node = document.createElement("div");
+  node.className = rowClass(r) + " landing";
+  node.innerHTML = rowMarkup(r);
+  node.addEventListener("animationend", () => node.classList.remove("landing"), { once: true });
+  return node;
+}
+
+function updateRowNode(node, r) {
+  node.className = rowClass(r);
+  node.innerHTML = rowMarkup(r);
+}
+
+function groupKeyOf(r) {
+  return `${isFamily(r) ? "0" : "1"}|${deviceOf(r).toLowerCase()}`;
+}
+
+function renderGroupFor(r) {
+  const queue = el["discover-queue"];
+  if (!queue) return;
+  const gk = groupKeyOf(r);
+  let group = groupNodes.get(gk);
+  if (!group) {
+    if (!passesFilters(r)) return;
+    const header = document.createElement("div");
+    header.className = "group-header" + (isFamily(r) ? " family" : "");
+    const rows = document.createElement("div");
+    rows.className = "group-rows";
+    queue.append(header, rows);
+    group = { header, rows, nodes: new Map() };
+    groupNodes.set(gk, group);
+  }
+  // header
+  const members = [...instances.values()].filter((x) => groupKeyOf(x) === gk);
+  const latest = members.reduce((a, b) => ((a.seenAt ?? 0) > (b.seenAt ?? 0) ? a : b));
+  group.header.innerHTML =
+    `<span class="g-name">${escapeHtml(deviceOf(latest))}</span>` +
+    `<span class="g-meta">${members.filter((m) => presence(m) !== "gone").length} live · ${members.length} services</span>`;
+  // rows
+  const rk = instanceRowKey(r);
+  let node = group.nodes.get(rk);
+  if (!passesFilters(r)) {
+    if (node) { node.remove(); group.nodes.delete(rk); }
+    return;
+  }
+  if (!node) {
+    node = buildRow(r);
+    group.nodes.set(rk, node);
+    group.rows.append(node);
+  } else {
+    updateRowNode(node, r);
+  }
+  sortGroups();
+}
+
+function sortGroups() {
+  const queue = el["discover-queue"];
+  if (!queue) return;
+  const order = [...groupNodes.entries()]
+    .map(([gk, g]) => {
+      const members = [...instances.values()].filter((x) => groupKeyOf(x) === gk);
+      const latest = members.reduce((a, b) => ((a.seenAt ?? 0) > (b.seenAt ?? 0) ? a : b), {});
+      return { gk, at: latest.seenAt ?? 0 };
+    })
+    .sort((a, b) => b.at - a.at);
+  for (const { gk } of order) {
+    const g = groupNodes.get(gk);
+    if (g) queue.append(g.header, g.rows);
+  }
+  const visible = order.filter(({ gk }) => {
+    const g = groupNodes.get(gk);
+    return g && g.rows.childElementCount > 0;
+  });
+  const count = el["discover-count"];
+  if (count) count.textContent = `${visible.length} device${visible.length === 1 ? "" : "s"}`;
+}
+
+function renderAllGroups() {
+  for (const r of instances.values()) renderGroupFor(r);
+  // drop empty groups
+  for (const [gk, g] of [...groupNodes.entries()]) {
+    if (g.rows.childElementCount === 0) {
+      g.header.remove();
+      g.rows.remove();
+      groupNodes.delete(gk);
+    }
+  }
+  sortGroups();
+}
+
+function updateDiscoverTiles() {
+  const all = [...instances.values()];
+  const live = all.filter((r) => presence(r) === "live");
+  const types = new Set(all.map((r) => r.service_type));
+  setFact(el["t-stream"], streamState, streamState === "live" ? "ok" : streamState === "connecting" ? "" : "down");
+  setFact(el["t-live"], String(live.length), live.length ? "ok" : "down");
+  setFact(el["t-types"], String(types.size));
+  setFact(el["t-remembered"], String(all.length));
+}
+
+function refreshTypeDropdown() {
+  const select = el["discover-type"];
+  if (!select) return;
+  const types = [...new Set([...instances.values()].map((r) => r.service_type))].sort();
+  const current = select.value;
+  select.replaceChildren(
+    Object.assign(document.createElement("option"), { value: "", textContent: "All types" })
+  );
+  for (const t of types) {
+    select.append(Object.assign(document.createElement("option"), { value: t, textContent: typeLabel(t) }));
+  }
+  select.value = current;
+  if (select.value !== current) { select.value = ""; typeFilter = ""; }
+}
+
+async function seedSnapshot() {
+  try {
+    const snap = await invoke("discover_snapshot");
+    dlog(`snapshot ok: instances=${(snap.instances ?? []).length}`);
+    for (const meta of snap.service_types ?? []) {
+      if (meta.service_type) {
+        typeLabels.set(meta.service_type, { label: meta.label, description: meta.description });
+      }
+    }
+    for (const r of snap.instances ?? []) upsertInstance(r);
+  } catch (error) {
+    streamState = "offline";
+    dlog(`snapshot unavailable: ${error}`);
+  }
+  updateDiscoverTiles();
+  refreshTypeDropdown();
+}
+
+async function startDiscover() {
+  try { await invoke("discover_start"); } catch (error) { dlog(`discover_start failed: ${error}`); }
+  await seedSnapshot();
+}
+
+if (window.__TAURI__?.event?.listen) {
+  window.__TAURI__.event.listen("mdns-event", (event) => {
+    const payload = event.payload ?? {};
+    switch (payload.kind) {
+      case "resolved": {
+        if (payload.data) {
+          streamState = "live";
+          dlog(`resolved: ${payload.data.service_type} ${payload.data.name}`);
+          upsertInstance(payload.data);
+        }
+        break;
+      }
+      case "removed":
+        streamState = "live";
+        markGone(payload.data ?? {});
+        break;
+      case "type_found":
+        streamState = "live";
+        seedSnapshot(); // picks up the new type's label + any cached instances
+        break;
+      default:
+        break;
+    }
+  });
+}
+
+// Presence and ages tick in place; rows never rebuild, so nothing pops.
+setInterval(() => {
+  let changedPresence = false;
+  for (const [k, r] of instances) {
+    const g = groupNodes.get(groupKeyOf(r));
+    const node = g?.nodes.get(instanceRowKey(r));
+    if (!node) continue;
+    const before = node.className;
+    const dur = node.querySelector(".row-dur");
+    if (dur) dur.textContent = agoText(r.seenAt ?? Date.now());
+    updateRowNode(node, r);
+    if (node.className !== before) changedPresence = true;
+  }
+  if (changedPresence) { renderAllGroups(); }
+  updateDiscoverTiles();
+}, 5000);
+
+document.getElementById("discover-filter")?.addEventListener("input", (e) => {
+  discoverFilter = e.target.value.trim().toLowerCase();
+  renderAllGroups();
+});
+document.getElementById("discover-type")?.addEventListener("change", (e) => {
+  typeFilter = e.target.value;
+  renderAllGroups();
+});
+document.getElementById("discover-state")?.addEventListener("change", (e) => {
+  stateFilter = e.target.value;
+  renderAllGroups();
+});
+document.getElementById("refresh-discover")?.addEventListener("click", () => startDiscover());
+document.getElementById("ping-pond")?.addEventListener("click", async () => {
+  setFact(el["t-stream"], "pinging…");
+  try {
+    const result = await invoke("discover_ping");
+    dlog(`ping: ${JSON.stringify(result)}`);
+    setFact(el["t-stream"], `burst across ${result.types_known ?? 0} type(s)`, "ok");
+    // Answers arrive as pushed events; refresh the seed shortly anyway.
+    setTimeout(seedSnapshot, 1500);
+  } catch (error) {
+    dlog(`ping failed: ${error}`);
+    setFact(el["t-stream"], String(error), "down");
+  }
+});
+
+function updateDiscoverTiles() {
+  const types = new Set([...instances.values()].map((r) => r.service_type));
+  setFact(el["t-types"], String(types.size), types.size ? "ok" : "down");
+  setFact(el["t-instances"], String(instances.size), instances.size ? "ok" : "");
+  setFact(el["t-stream"], streamState, streamState === "live" ? "ok" : streamState === "connecting" ? "" : "down");
+}
+
+async function seedSnapshot() {
+  try {
+    const snap = await invoke("discover_snapshot");
+    dlog(`snapshot ok: instances=${(snap.instances ?? []).length}`);
+    for (const r of snap.instances ?? []) upsertInstance(r);
+  } catch (error) {
+    streamState = "offline";
+    dlog(`snapshot unavailable: ${error}`);
+  }
+  updateDiscoverTiles();
+}
+
+async function startDiscover() {
+  try { await invoke("discover_start"); } catch (error) { dlog(`discover_start failed: ${error}`); }
+  await seedSnapshot();
+}
+
+if (window.__TAURI__?.event?.listen) {
+  window.__TAURI__.event.listen("mdns-event", (event) => {
+    const payload = event.payload ?? {};
+    switch (payload.kind) {
+      case "resolved":
+        if (payload.data) { streamState = "live"; upsertInstance(payload.data); }
+        break;
+      case "removed":
+        streamState = "live";
+        dropInstance(payload.data ?? {});
+        break;
+      case "type_found":
+        streamState = "live";
+        updateDiscoverTiles();
+        break;
+      default:
+        break;
     }
   });
 }
@@ -157,6 +543,28 @@ function armCard() {
   card.addEventListener("pointerleave", () => card.style.setProperty("--holo", "0"));
 }
 
+if (window.__TAURI__?.event?.listen) {
+  // The lamp: pushed by the Rust reader on /v1/events connect + heartbeats.
+  window.__TAURI__.event.listen("daemon-status", (event) => {
+    let svc = { installed: false, running: false };
+    // SCM state is cheap and local; refresh alongside each push.
+    invoke("service_status").then((s) => { svc = s ?? svc; }).catch(() => {})
+      .finally(() => applyStatus(event.payload ?? { up: false }, svc));
+  });
+  // Domain events: forwarded wire events (dns.*, certmesh.*, mdns.* …).
+  window.__TAURI__.event.listen("daemon-event", (event) => {
+    const payload = event.payload ?? {};
+    // A posture/certmesh event may have changed the level — pull once.
+    if (/certmesh|posture/.test(String(payload.kind))) { lastStatus = ""; refreshStatus(); }
+    dlog(`daemon-event: ${payload.kind}`);
+  });
+} else {
+  dlog("tauri event API unavailable — falling back to reconcile-only");
+}
+
 armCard();
-tick();
-setInterval(tick, POLL_MS);
+startDiscover();
+invoke?.("status_events_start");
+refreshStatus();
+// Safety net only: the stream is the driver; this catches missed pushes.
+setInterval(refreshStatus, 60000);

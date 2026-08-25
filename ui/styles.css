@@ -751,3 +751,36 @@ kbd { padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; col
 .tile .mono { font: 400 12px/1.4 var(--mono); color: var(--ink-2); word-break: break-all; }
 .about-facts dd.ok { color: var(--a); }
 .about-facts dd.down { color: var(--muted); }
+
+/* ── Discover pane deltas ── */
+.row.discover { grid-template-columns: 24px 150px minmax(0, 1fr) minmax(0, 1fr) 90px 90px; }
+@media (max-width: 820px) {
+  .row.discover { grid-template-columns: 24px 120px minmax(0, 1fr) 90px; }
+}
+
+/* ── Discover: inhabitants, presence, groups ── */
+.row.discover { grid-template-columns: 24px 150px minmax(0, 1fr) minmax(0, 1fr) 90px 90px; }
+@media (max-width: 820px) {
+  .row.discover { grid-template-columns: 24px 120px minmax(0, 1fr) 90px; }
+}
+.med-mini { color: var(--faint); }
+.med-mini.family { color: var(--a); }
+.row.live .row-cap { color: var(--ok); }
+.row.fading { opacity: .62; }
+.row.fading .row-cap { color: var(--warn); }
+.row.gone { opacity: .35; }
+.group-header {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 12px 12px 6px; border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.group-header .g-name { color: var(--ink); font-size: 13px; font-weight: 600; letter-spacing: .02em; }
+.group-header.family .g-name { color: var(--al); }
+.group-header .g-meta { color: var(--muted); font: 400 11px/1 var(--mono); }
+.filter-input, .filter-select {
+  height: 30px; padding: 0 10px;
+  border: 1px solid var(--line-2); border-radius: 7px;
+  background: var(--panel); color: var(--ink-2); font-size: 12px;
+}
+.filter-input { width: 180px; }
+.sub { color: var(--muted); }
