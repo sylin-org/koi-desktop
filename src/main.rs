@@ -271,6 +271,11 @@ fn dns_txt_clear(name: String, value: String) -> Result<serde_json::Value, Strin
 
 static DISCOVER_STARTED: AtomicBool = AtomicBool::new(false);
 
+/// Push the live discover-stream state to the UI so "live" is never stale.
+fn emit_stream_state(app: &tauri::AppHandle, state: &str) {
+    let _ = app.emit("discover-stream", serde_json::json!(state));
+}
+
 /// Breadcrumb: the daemon's two-line discovery file (endpoint + DAT). The
 /// workbench reads it exactly like the CLI does.
 fn read_breadcrumb() -> Option<(String, Option<String>)> {
@@ -317,10 +322,18 @@ fn fetch_status_value(agent: &ureq::Agent, endpoint: &str) -> serde_json::Value 
 }
 
 fn emit_down_status(app: &tauri::AppHandle) {
-    let _ = app.emit(
-        "daemon-status",
-        serde_json::json!({ "up": false, "version": null, "posture": null }),
-    );
+    // "Down" means the daemon is truly absent — healthz fails too. A daemon
+    // that merely lacks /v1/events (older builds) is still up.
+    let healthz_ok = daemon_agent()
+        .get(format!("{DAEMON_ORIGIN}/healthz").as_str())
+        .call()
+        .is_ok();
+    if !healthz_ok {
+        let _ = app.emit(
+            "daemon-status",
+            serde_json::json!({ "up": false, "version": null, "posture": null }),
+        );
+    }
 }
 
 static STATUS_STREAM_STARTED: AtomicBool = AtomicBool::new(false);
@@ -403,6 +416,7 @@ fn discover_start(app: tauri::AppHandle) -> Result<(), String> {
                 .call()
             {
                 Ok(response) => {
+                    emit_stream_state(&app, "live");
                     let mut reader = std::io::BufReader::new(response.into_reader());
                     let mut kind = String::new();
                     let mut data = String::new();
@@ -432,7 +446,9 @@ fn discover_start(app: tauri::AppHandle) -> Result<(), String> {
                         }
                     }
                 }
-                Err(_) => {}
+                Err(_) => {
+                    emit_stream_state(&app, "offline");
+                }
             }
             // The daemon is down or the stream dropped; try again shortly.
             std::thread::sleep(Duration::from_secs(2));

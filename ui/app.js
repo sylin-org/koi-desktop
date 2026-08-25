@@ -416,18 +416,15 @@ if (window.__TAURI__?.event?.listen) {
     switch (payload.kind) {
       case "resolved": {
         if (payload.data) {
-          streamState = "live";
           dlog(`resolved: ${payload.data.service_type} ${payload.data.name}`);
           upsertInstance(payload.data);
         }
         break;
       }
       case "removed":
-        streamState = "live";
         markGone(payload.data ?? {});
         break;
       case "type_found":
-        streamState = "live";
         seedSnapshot(); // picks up the new type's label + any cached instances
         break;
       default:
@@ -509,14 +506,12 @@ if (window.__TAURI__?.event?.listen) {
     const payload = event.payload ?? {};
     switch (payload.kind) {
       case "resolved":
-        if (payload.data) { streamState = "live"; upsertInstance(payload.data); }
+        if (payload.data) { upsertInstance(payload.data); }
         break;
       case "removed":
-        streamState = "live";
         dropInstance(payload.data ?? {});
         break;
       case "type_found":
-        streamState = "live";
         updateDiscoverTiles();
         break;
       default:
@@ -544,6 +539,11 @@ function armCard() {
 }
 
 if (window.__TAURI__?.event?.listen) {
+  // The Rust reader owns the real stream state; the UI never invents "live".
+  window.__TAURI__.event.listen("discover-stream", (event) => {
+    streamState = String(event.payload ?? "connecting");
+    updateDiscoverTiles();
+  });
   // The lamp: pushed by the Rust reader on /v1/events connect + heartbeats.
   window.__TAURI__.event.listen("daemon-status", (event) => {
     let svc = { installed: false, running: false };
