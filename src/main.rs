@@ -458,13 +458,17 @@ fn discover_start(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 /// Debug sink: the workbench's own console, on disk, so a headless session can
-/// diagnose the webview. Milestones + errors only; safe to remove later.
+/// diagnose the webview. Milestones + errors only. Repo-local `.tmp/` when the
+/// shell's working directory is the checkout (the dev-loop case); falls back to
+/// the OS temp dir otherwise. Safe to remove later.
 #[tauri::command]
 fn debug_log(message: String) {
-    let dir = std::env::var("LOCALAPPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir())
-        .join("Koi");
+    let dir = std::env::current_dir()
+        .map(|cwd| cwd.join(".tmp"))
+        .ok()
+        .filter(|p| p.is_dir())
+        .or_else(|| std::env::var("LOCALAPPDATA").ok().map(|d| std::path::PathBuf::from(d).join("Koi")))
+        .unwrap_or_else(|| std::env::temp_dir());
     let _ = std::fs::create_dir_all(&dir);
     let line = format!(
         "[{}] {}\n",
