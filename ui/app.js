@@ -37,6 +37,7 @@ const el = {};
 for (const id of [
   "lamp", "state-word", "state-facts",
   "service-state", "service-detail", "btn-start", "btn-run-once", "btn-stop", "action-note",
+  "autostart-toggle",
   "t-http", "t-posture", "t-version",
   "t-stream", "t-types", "t-instances", "discover-queue", "discover-count",
   "koi-card", "card-version", "f-daemon", "f-posture", "f-host", "f-version",
@@ -130,6 +131,37 @@ async function act(name) {
 el["btn-start"]?.addEventListener("click", () => act("service_start"));
 el["btn-stop"]?.addEventListener("click", () => act("service_stop"));
 el["btn-run-once"]?.addEventListener("click", () => act("daemon_run_once"));
+
+// ── autostart (login launch, minimized to tray) ─────────────────────────────
+// The plugin degrades honestly: if the platform refuses (unsupported session,
+// policy), the toggle reports the failure instead of pretending.
+const autostartApi = window.__TAURI__?.autostart;
+async function refreshAutostart() {
+  const toggle = el["autostart-toggle"];
+  if (!toggle || !autostartApi?.isEnabled) return;
+  try {
+    toggle.checked = await autostartApi.isEnabled();
+  } catch (error) {
+    dlog(`autostart isEnabled failed: ${error}`);
+    toggle.disabled = true;
+    note(`Autostart is unavailable here: ${error}`, true);
+  }
+}
+el["autostart-toggle"]?.addEventListener("change", async (event) => {
+  if (!autostartApi) return;
+  const want = event.target.checked;
+  try {
+    if (want) { await autostartApi.enable(); } else { await autostartApi.disable(); }
+    note(want
+      ? "Koi will start (minimized to the tray) when you log in."
+      : "Koi will no longer start at login.");
+  } catch (error) {
+    dlog(`autostart change failed: ${error}`);
+    note(`Autostart could not be changed: ${error}`, true);
+  }
+  refreshAutostart();
+});
+refreshAutostart();
 document.getElementById("refresh-status")?.addEventListener("click", () => { lastStatus = ""; refreshStatus(); });
 
 // ── tabs ─────────────────────────────────────────────────────────────

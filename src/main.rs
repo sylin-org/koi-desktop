@@ -27,6 +27,11 @@ const DAEMON_ORIGIN: &str = "http://127.0.0.1:5641";
 const SERVICE_NAME: &str = "koi";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// `--minimized`: login/autostart launches stay in the tray; the workbench
+/// window is only built when revealed. Without a usable tray the window is
+/// the honest fallback surface, so the flag yields to it.
+static START_MINIMIZED: AtomicBool = AtomicBool::new(false);
+
 struct Workbench {
     tray_available: Arc<AtomicBool>,
 }
@@ -44,6 +49,9 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    if std::env::args().any(|arg| arg == "--minimized") {
+        START_MINIMIZED.store(true, Ordering::SeqCst);
+    }
     let workbench = Workbench {
         tray_available: Arc::new(AtomicBool::new(false)),
     };
@@ -52,6 +60,11 @@ fn run() -> Result<()> {
     let app = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         tauri::Builder::default()
             .manage(OnDemandDaemon::default())
+            .plugin(
+                tauri_plugin_autostart::Builder::new()
+                    .args(["--minimized"])
+                    .build(),
+            )
             .invoke_handler(tauri::generate_handler![
                 service_status,
                 service_start,
@@ -99,6 +112,16 @@ fn run() -> Result<()> {
     let tray_available = Arc::clone(&workbench.tray_available);
     app.run(move |_app, event| {
         if let RunEvent::Ready = event {
+            if START_MINIMIZED.load(Ordering::SeqCst) && tray_available.load(Ordering::SeqCst) {
+                eprintln!("Koi is starting minimized to its tray");
+                return;
+            }
+            if START_MINIMIZED.load(Ordering::SeqCst) {
+                eprintln!(
+                    "Koi was asked to start minimized but no tray is available; \
+                     showing the workbench instead"
+                );
+            }
             match build_workbench(_app) {
                 Ok(window) => {
                     if let Err(error) = window.set_focus() {
@@ -175,8 +198,8 @@ fn discover_snapshot() -> Result<serde_json::Value, String> {
 #[tauri::command]
 fn discover_ping() -> Result<serde_json::Value, String> {
     let (_, token) = read_breadcrumb().ok_or("no daemon breadcrumb found — is Koi running?")?;
-    let mut request = daemon_agent()
-        .post(format!("{DAEMON_ORIGIN}/v1/mdns/browser/query").as_str());
+    let mut request =
+        daemon_agent().post(format!("{DAEMON_ORIGIN}/v1/mdns/browser/query").as_str());
     if let Some(token) = &token {
         request = request.set("x-koi-token", token);
     }
@@ -281,8 +304,11 @@ fn emit_stream_state(app: &tauri::AppHandle, state: &str) {
 fn read_breadcrumb() -> Option<(String, Option<String>)> {
     #[cfg(windows)]
     let path = {
-        let program_data = std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into());
-        std::path::PathBuf::from(program_data).join("koi").join("koi.endpoint")
+        let program_data =
+            std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into());
+        std::path::PathBuf::from(program_data)
+            .join("koi")
+            .join("koi.endpoint")
     };
     #[cfg(not(windows))]
     let path = std::path::PathBuf::from("/var/run/koi.endpoint");
@@ -378,10 +404,14 @@ fn status_events_start(app: tauri::AppHandle) -> Result<(), String> {
                             data.push_str(d.trim());
                         } else if line.is_empty() {
                             if kind == "heartbeat" {
-                                let _ = app.emit("daemon-status", fetch_status_value(&agent, &endpoint));
+                                let _ = app
+                                    .emit("daemon-status", fetch_status_value(&agent, &endpoint));
                             } else if !kind.is_empty() {
-                                let parsed: Option<serde_json::Value> =
-                                    if data.is_empty() { None } else { serde_json::from_str(&data).ok() };
+                                let parsed: Option<serde_json::Value> = if data.is_empty() {
+                                    None
+                                } else {
+                                    serde_json::from_str(&data).ok()
+                                };
                                 let _ = app.emit(
                                     "daemon-event",
                                     serde_json::json!({ "kind": kind, "data": parsed }),
@@ -434,8 +464,11 @@ fn discover_start(app: tauri::AppHandle) -> Result<(), String> {
                             data.push_str(d.trim());
                         } else if line.is_empty() {
                             if !kind.is_empty() {
-                                let parsed: Option<serde_json::Value> =
-                                    if data.is_empty() { None } else { serde_json::from_str(&data).ok() };
+                                let parsed: Option<serde_json::Value> = if data.is_empty() {
+                                    None
+                                } else {
+                                    serde_json::from_str(&data).ok()
+                                };
                                 let _ = app.emit(
                                     "mdns-event",
                                     serde_json::json!({ "kind": kind, "data": parsed }),
@@ -467,7 +500,11 @@ fn debug_log(message: String) {
         .map(|cwd| cwd.join(".tmp"))
         .ok()
         .filter(|p| p.is_dir())
-        .or_else(|| std::env::var("LOCALAPPDATA").ok().map(|d| std::path::PathBuf::from(d).join("Koi")))
+        .or_else(|| {
+            std::env::var("LOCALAPPDATA")
+                .ok()
+                .map(|d| std::path::PathBuf::from(d).join("Koi"))
+        })
         .unwrap_or_else(|| std::env::temp_dir());
     let _ = std::fs::create_dir_all(&dir);
     let line = format!(
