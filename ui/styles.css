@@ -493,11 +493,12 @@ kbd { padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; col
   animation: card-halo 5s ease-in-out infinite;
 }
 @keyframes card-halo { 0%, 100% { opacity: .7; transform: scale(.94); } 50% { opacity: 1; transform: scale(1.06); } }
-/* Exactly twice the 128px sprite. Any other size splits source pixels unevenly across screen
-   pixels, which is what reads as aliasing however hard `pixelated` tries. */
-.tcg .card-art .mascot { position: relative; z-index: 1; width: 256px; height: 256px; }
+/* Exactly 2:1 and 3:1 of the 100px sprite. Any other size splits source pixels unevenly
+   across screen pixels, which is what reads as aliasing however hard `pixelated` tries.
+   (256/384 assumed a 128px sprite; the shipped export is 100x100.) */
+.tcg .card-art .mascot { position: relative; z-index: 1; width: 200px; height: 200px; }
 .tcg .card-art .mascot-echo {
-  position: absolute; top: 50%; left: 50%; width: 384px; height: 384px;
+  position: absolute; top: 50%; left: 50%; width: 300px; height: 300px;
   transform: translate(-50%, -50%) translate(var(--gx, 0), var(--gy, 0));
   filter: blur(7px) saturate(1.3); opacity: calc(var(--holo, 0) * .3);
   transition: opacity .4s ease, transform .2s ease-out; pointer-events: none; z-index: 0;
