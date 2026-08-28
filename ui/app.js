@@ -724,6 +724,14 @@ if (window.__TAURI__?.event?.listen) {
   }
 
   // Domain events: forwarded wire events (dns.*, certmesh.*, mdns.* …).
+  // A loopback poke (127.0.0.1:5640/poke) means something local just changed
+  // the daemon's world (Run once, install, a script) — re-read everything now.
+  window.__TAURI__.event.listen("ui-poked", () => {
+    dlog("poked: re-reading the pond");
+    lastStatus = "";
+    refreshStatus();
+    seedSnapshot();
+  });
   window.__TAURI__.event.listen("daemon-event", (event) => {
     const payload = event.payload ?? {};
     const kind = String(payload.kind ?? "");

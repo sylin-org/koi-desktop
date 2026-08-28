@@ -49,6 +49,9 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    if std::env::args().any(|a| a == "--poke") {
+        run_poke_and_exit();
+    }
     if std::env::args().any(|arg| arg == "--minimized") {
         START_MINIMIZED.store(true, Ordering::SeqCst);
     }
@@ -84,6 +87,9 @@ fn run() -> Result<()> {
                 debug_log
             ])
             .setup(move |app| {
+                if let Err(error) = start_ui_poke_listener(app.handle().clone()) {
+                    eprintln!("Koi poke listener unavailable: {error}");
+                }
                 match build_tray(app) {
                     Ok(info_item) => {
                         start_posture_polling(app.handle().clone(), info_item);
@@ -177,6 +183,96 @@ fn daemon_get(address: String, port: u16, path: String) -> Result<serde_json::Va
     get_json(&daemon_agent(), url.clone()).ok_or_else(|| format!("{url}: no data"))
 }
 
+const UI_POKE_PORT: u16 = 5640;
+
+/// Route a poke-request line. Loopback only; the only meaningful paths are
+/// /poke (refresh now) and /health (is a UI listening).
+fn poke_route(request_line: &str) -> &'static str {
+    if request_line.starts_with("GET /poke ")
+        || request_line.starts_with("GET /poke?")
+        || request_line == "GET /poke"
+    {
+        "poke"
+    } else if request_line.starts_with("GET /health") {
+        "health"
+    } else {
+        "other"
+    }
+}
+
+/// localhost-only poke listener: any local process (a script, the installer,
+/// a second instance with --poke) can nudge every running workbench to
+/// re-read the daemon immediately. Never binds beyond 127.0.0.1.
+fn start_ui_poke_listener(app: tauri::AppHandle) -> Result<(), String> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", UI_POKE_PORT))
+        .map_err(|e| format!("poke port {}: {e}", UI_POKE_PORT))?;
+    std::thread::spawn(move || {
+        use std::io::Write as _;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(250)));
+            let mut buf = [0u8; 1024];
+            let _ = std::io::Read::read(&mut stream, &mut buf);
+            let request_line = String::from_utf8_lossy(&buf);
+            let route = poke_route(
+                request_line
+                    .split(
+                        "
+",
+                    )
+                    .next()
+                    .unwrap_or(""),
+            );
+            let (code, body) = match route {
+                "poke" => {
+                    let _ = app.emit("ui-poked", serde_json::json!({}));
+                    ("200 OK", "poked")
+                }
+                "health" => ("200 OK", "koi ui here"),
+                _ => ("404 NOT FOUND", "try /poke"),
+            };
+            let response = format!(
+                "HTTP/1.1 {code}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    Ok(())
+}
+
+/// Second-instance nudge: `koi-desktop --poke` pokes every running UI on
+/// this machine and exits without starting a new workbench.
+fn run_poke_and_exit() -> ! {
+    let result =
+        std::net::TcpStream::connect(("127.0.0.1", UI_POKE_PORT)).and_then(|mut stream| {
+            use std::io::Write;
+            stream.write_all(
+                b"GET /poke HTTP/1.1
+Host: 127.0.0.1
+Connection: close
+
+",
+            )?;
+            stream.flush()?;
+            let mut buf = String::new();
+            let _ = std::io::Read::read_to_string(&mut stream, &mut buf);
+            Ok(buf)
+        });
+    match result {
+        Ok(text) => println!(
+            "poked a running koi ui: {}",
+            if text.contains("200 OK") {
+                "acknowledged".to_string()
+            } else {
+                text
+            }
+        ),
+        Err(e) => println!("no koi ui running on 127.0.0.1:{} ({e})", UI_POKE_PORT),
+    }
+    std::process::exit(0);
+}
 fn daemon_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(3))
