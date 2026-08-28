@@ -57,6 +57,18 @@
     );
   }
 
+  // The stable subject a sentence is about (pinning and flapping key this).
+  function subjectOf(kind, data) {
+    data = data ?? {};
+    if (kind.startsWith("runtime.")) return "container:" + (data.name || data.id || "?");
+    if (kind.startsWith("mdns.")) return "announcement:" + (data.name || "?");
+    if (kind.startsWith("dns.")) return "dns:" + (data.name || "?");
+    if (kind.startsWith("certmesh.")) return "trust:" + (data.hostname || "ca");
+    if (kind.startsWith("proxy.")) return "proxy:" + (data.name || "?");
+    if (kind === "health.changed") return "health:" + (data.name || "?");
+    return "kind:" + kind;
+  }
+
   function sentenceFor(kind, data) {
     data = data ?? {};
     const entry = REGISTRY[kind] ?? { view: "status", tone: "info" };
@@ -125,5 +137,5 @@
     }
   }
 
-  window.KoiSentences = { sentenceFor, targetOf, REGISTRY };
+  window.KoiSentences = { sentenceFor, subjectOf, targetOf, REGISTRY };
 })();

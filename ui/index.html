@@ -128,15 +128,31 @@
           <button class="ghost-button" type="button" id="refresh-status">Refresh</button>
         </div>
 
+        <article class="strip" id="status-hero" data-tone="">
+          <div>
+            <h2 id="hero-word">Watching the pond</h2>
+            <p id="hero-detail">Events land here as they happen, newest first.</p>
+          </div>
+          <div class="hero-side">
+            <div id="hero-pins" class="hero-pins"></div>
+            <div id="hero-attention"></div>
+          </div>
+        </article>
+        <p class="action-note" id="hero-note"></p>
+        <div id="status-stream" class="status-stream" aria-live="polite"></div>
+
         <article class="strip" id="service-strip">
           <div>
             <h2 id="service-state">Service not running</h2>
             <p id="service-detail">The daemon is not installed or not running on this machine.</p>
           </div>
           <div class="strip-actions">
-            <button class="ghost-button" type="button" id="btn-start">Start service</button>
-            <button class="ghost-button" type="button" id="btn-run-once">Run once</button>
-            <button class="danger-button" type="button" id="btn-stop">Stop</button>
+            <button class="ghost-button" type="button" id="btn-start"
+              title="Starts the installed koi service; it will serve on the standard ports until stopped">Start service</button>
+            <button class="ghost-button" type="button" id="btn-run-once"
+              title="Runs one temporary daemon until you stop it — nothing is installed">Run once</button>
+            <button class="danger-button" type="button" id="btn-stop"
+              title="Stops the service; the pond loses this fish until started again">Stop</button>
           </div>
         </article>
         <p class="action-note" id="action-note"></p>

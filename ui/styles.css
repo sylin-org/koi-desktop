@@ -804,3 +804,35 @@ kbd { padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; col
 .autostart { display: flex; align-items: center; gap: 9px; margin-top: 12px; color: var(--muted); font-size: 11.5px; cursor: pointer; }
 .autostart input { accent-color: var(--a, #60a5fa); width: 14px; height: 14px; }
 .autostart input:disabled { cursor: not-allowed; opacity: 0.5; }
+
+/* ── Status streaming hero (cycle 1 WP1) ─────────────────────────────── */
+#status-hero { margin: 0 0 18px 0; }
+#status-hero[data-tone="warn"] { border-color: var(--attention, #fbbf24); }
+#status-hero[data-tone="bad"] { border-color: #f87171; }
+.hero-side { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.hero-pins { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.hero-pin { font-size: 13px; color: var(--a, #60a5fa); cursor: pointer; }
+.hero-pin:hover { text-decoration: underline; }
+.hero-attention { font-size: 13px; color: var(--attention, #fbbf24); text-align: right; }
+#hero-note { min-height: 18px; }
+.status-stream { display: flex; flex-direction: column; gap: 2px; margin: 0 0 22px 0; }
+.status-stream:empty::after {
+  content: "all quiet — nothing needs you";
+  color: var(--dim, #8b8b94);
+  font-size: 14px;
+  font-style: italic;
+  display: block;
+  padding: 10px 2px;
+}
+.stream-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 6px 8px; border-radius: 6px; font-size: 14px; cursor: pointer;
+}
+.stream-row:hover { background: rgba(96, 165, 250, 0.08); }
+.stream-row .ago { color: var(--dim, #8b8b94); min-width: 34px; font-size: 12px; }
+.stream-row .pin { opacity: 0.35; cursor: pointer; border: none; background: none;
+  color: inherit; font-size: 12px; padding: 0 4px; }
+.stream-row .pin:hover, .stream-row .pin.pinned { opacity: 1; color: var(--a, #60a5fa); }
+.stream-row[data-tone="good"] .line { color: var(--ok, #4ade80); }
+.stream-row[data-tone="warn"] .line { color: var(--attention, #fbbf24); }
+.stream-row[data-tone="bad"] .line { color: #f87171; }

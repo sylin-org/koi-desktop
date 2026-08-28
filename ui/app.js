@@ -583,16 +583,162 @@ if (window.__TAURI__?.event?.listen) {
     invoke("service_status").then((s) => { svc = s ?? svc; }).catch(() => {})
       .finally(() => applyStatus(event.payload ?? { up: false }, svc));
   });
+  // ── Status streaming hero (cycle-1 WP1) ──
+  // Sentences stream newest-first; watched subjects pin; a restart storm is
+  // ONE flapping row, not N; a settled window leaves the designed quiet state.
+  const KS = window.KoiSentences;
+  const streamRows = [];            // newest first: {ts, line, tone, target, subject}
+  const flap = new Map();           // subject → {count, until, line, tone, target}
+  const FLAP_MS = 90 * 1000;
+  const STREAM_CAP = 50;
+  let watched = new Set();
+  try { watched = new Set(JSON.parse(localStorage.getItem("koi-watched") || "[]")); } catch (_) {}
+
+  const heroWord = document.getElementById("hero-word");
+  const heroDetail = document.getElementById("hero-detail");
+  const heroPins = document.getElementById("hero-pins");
+  const heroAttention = document.getElementById("hero-attention");
+  const heroNote = document.getElementById("hero-note");
+  const streamNode = document.getElementById("status-stream");
+
+  function renderHero(degraded) {
+    const pins = [...watched];
+    const attention = degraded.slice(0, 4);
+    heroPins.textContent = "";
+    for (const subject of pins) {
+      const b = document.createElement("button");
+      b.className = "hero-pin";
+      b.type = "button";
+      b.textContent = "📌 " + subject;
+      b.addEventListener("click", () => unpin(subject));
+      heroPins.appendChild(b);
+    }
+    heroAttention.textContent = attention.join(" · ");
+    if (attention.length) {
+      heroWord.textContent = "Needs you";
+      heroDetail.textContent = attention[0];
+      document.getElementById("status-hero").dataset.tone = "warn";
+    } else if (streamRows.length || pins.length) {
+      heroWord.textContent = "Pond is living";
+      heroDetail.textContent = pins.length
+        ? "watching " + pins.length + " subject(s); everything else flows past"
+        : "events stream as they happen";
+      delete document.getElementById("status-hero").dataset.tone;
+    } else {
+      heroWord.textContent = "Watching the pond";
+      heroDetail.textContent = "events land here as they happen, newest first";
+      delete document.getElementById("status-hero").dataset.tone;
+    }
+  }
+
+  function renderStream() {
+    streamNode.textContent = "";
+    const now = Date.now();
+    for (const row of streamRows) {
+      const div = document.createElement("div");
+      div.className = "stream-row";
+      div.dataset.tone = row.tone;
+      const ago = document.createElement("span");
+      ago.className = "ago";
+      ago.textContent = agoText(row.ts);
+      const line = document.createElement("span");
+      line.className = "line";
+      line.textContent = row.line;
+      const pin = document.createElement("button");
+      pin.className = "pin" + (watched.has(row.subject) ? " pinned" : "");
+      pin.type = "button";
+      pin.title = watched.has(row.subject) ? "unpin" : "pin to the hero";
+      pin.textContent = watched.has(row.subject) ? "★" : "☆";
+      pin.addEventListener("click", (e) => {
+        e.stopPropagation();
+        watched.has(row.subject) ? unpin(row.subject) : pin(row.subject);
+      });
+      div.append(ago, line, pin);
+      div.addEventListener("click", () => gotoView(KoiSentences.targetOf(row.target)));
+      streamNode.appendChild(div);
+    }
+    if (!streamRows.length && !streamNode.querySelector(".stream-row")) {
+      // :empty ::after renders the quiet copy; nothing to do
+    }
+    renderHero(collectDegraded());
+  }
+
+  function collectDegraded() {
+    const out = [];
+    for (const row of streamRows.slice(0, 20)) {
+      if (row.tone === "bad" || row.tone === "warn") out.push(row.line);
+      if (out.length >= 4) break;
+    }
+    return out;
+  }
+
+  function unpin(subject) {
+    watched.delete(subject);
+    saveWatched();
+    renderStream();
+  }
+
+  function pin(subject) {
+    watched.add(subject);
+    localStorage.setItem("koi-watched", JSON.stringify([...watched]));
+    renderStream();
+  }
+
+  function saveWatched() {
+    localStorage.setItem("koi-watched", JSON.stringify([...watched]));
+  }
+
+  function admitToStream(entry) {
+    // Flapping: the same subject restarting inside the window is ONE row + count.
+    const prior = flap.get(entry.subject);
+    if (prior && Date.now() < prior.until &&
+        (entry.kind === "runtime.started" || entry.kind === "runtime.stopped")) {
+      prior.count += 1;
+      prior.until = Date.now() + FLAP_MS;
+      const existing = streamRows.find((r) => r.flapKey === entry.subject);
+      if (existing) {
+        existing.ts = Date.now();
+        existing.line = prior.line + " — " + prior.count + " times in the last 90s";
+        renderStream();
+        return;
+      }
+    }
+    if (entry.kind === "runtime.started" || entry.kind === "runtime.stopped") {
+      flap.set(entry.subject, {
+        count: 1, until: Date.now() + FLAP_MS,
+        line: prior ? prior.line : entry.line, tone: entry.tone, target: entry.target,
+      });
+    }
+    streamRows.unshift({
+      ts: Date.now(), line: entry.line, tone: entry.tone,
+      target: entry.target, subject: entry.subject,
+      kind: entry.kind, flapKey: entry.subject,
+    });
+    if (streamRows.length > STREAM_CAP) streamRows.length = STREAM_CAP;
+    renderStream();
+  }
+
+  function gotoView(view) {
+    const tab = document.querySelector('.tab[data-view="' + view + '"]');
+    if (tab) tab.click();
+  }
+
   // Domain events: forwarded wire events (dns.*, certmesh.*, mdns.* …).
   window.__TAURI__.event.listen("daemon-event", (event) => {
     const payload = event.payload ?? {};
     const kind = String(payload.kind ?? "");
+    if (!kind) return;
     // A posture/certmesh event may have changed the level — pull once.
     if (/certmesh|posture/.test(kind)) { lastStatus = ""; refreshStatus(); }
     // DNS changes push: the table re-reads instead of polling.
     if (kind.startsWith("dns.")) loadDns();
-    dlog(`daemon-event: ${kind}`);
+    const s = KS.sentenceFor(kind, payload.data);
+    admitToStream({ kind, line: s.line, tone: s.tone, target: s.target,
+                    subject: KS.subjectOf(kind, payload.data) });
   });
+
+  // Hero admission: watched subjects render even with an empty stream.
+  renderStream();
 } else {
   dlog("tauri event API unavailable — falling back to reconcile-only");
 }
