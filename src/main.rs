@@ -204,8 +204,26 @@ fn poke_route(request_line: &str) -> &'static str {
 /// a second instance with --poke) can nudge every running workbench to
 /// re-read the daemon immediately. Never binds beyond 127.0.0.1.
 fn start_ui_poke_listener(app: tauri::AppHandle) -> Result<(), String> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", UI_POKE_PORT))
-        .map_err(|e| format!("poke port {}: {e}", UI_POKE_PORT))?;
+    // A kill-then-relaunch cycle can leave the old socket lingering for a
+    // moment; retry the bind instead of going poke-less for the whole run.
+    let listener = {
+        let mut bound = None;
+        for attempt in 0..20 {
+            match std::net::TcpListener::bind(("127.0.0.1", UI_POKE_PORT)) {
+                Ok(l) => {
+                    bound = Some(l);
+                    break;
+                }
+                Err(e) => {
+                    if attempt == 19 {
+                        return Err(format!("poke port {}: {e}", UI_POKE_PORT));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            }
+        }
+        bound.expect("bind retried 20 times")
+    };
     std::thread::spawn(move || {
         use std::io::Write as _;
         for stream in listener.incoming() {
