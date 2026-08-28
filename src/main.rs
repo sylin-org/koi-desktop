@@ -237,6 +237,7 @@ fn start_ui_poke_listener(app: tauri::AppHandle) -> Result<(), String> {
             );
             let _ = stream.write_all(response.as_bytes());
             let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Both);
         }
     });
     Ok(())
@@ -256,9 +257,10 @@ Connection: close
 ",
             )?;
             stream.flush()?;
-            let mut buf = String::new();
-            let _ = std::io::Read::read_to_string(&mut stream, &mut buf);
-            Ok(buf)
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stream, &mut buf);
+            Ok(String::from_utf8_lossy(&buf).into_owned())
         });
     match result {
         Ok(text) => println!(
