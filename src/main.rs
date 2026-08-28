@@ -70,6 +70,7 @@ fn run() -> Result<()> {
                 service_start,
                 service_stop,
                 daemon_run_once,
+                daemon_get,
                 daemon_status,
                 discover_start,
                 discover_snapshot,
@@ -146,6 +147,36 @@ fn run() -> Result<()> {
 // The webview never fetches cross-origin; WebView2's network stack eats
 // loopback requests unpredictably, so the shell proxies the loopback API.
 
+/// GET a daemon URL and parse the JSON body, or None on any failure — the
+/// flattened form of the call/into_string/from_str chain, sized for clippy
+/// and honest about "any failure is just: no data".
+fn get_json(agent: &ureq::Agent, url: String) -> Option<serde_json::Value> {
+    let text = agent.get(&url).call().ok()?.into_string().ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Read-only GET against any node's daemon (cycle-1 WP0): the cross-host
+/// browser and future scope views read sibling daemons' declared state. GETs
+/// are the LAN-readable surface by design; mutations never ride this command.
+fn validate_daemon_get(address: &str, port: u16, path: &str) -> Result<String, String> {
+    if address.trim().is_empty() || address.contains(['/', '\\', ' ', ':']) {
+        return Err("daemon address looks wrong".into());
+    }
+    if !(1..=65535).contains(&port) {
+        return Err("daemon port out of range".into());
+    }
+    if !path.starts_with('/') || path.contains([' ', '\t', '\r', '\n']) || path.contains("..") {
+        return Err("daemon path looks wrong".into());
+    }
+    Ok(format!("http://{address}:{port}{path}"))
+}
+
+#[tauri::command]
+fn daemon_get(address: String, port: u16, path: String) -> Result<serde_json::Value, String> {
+    let url = validate_daemon_get(&address, port, &path)?;
+    get_json(&daemon_agent(), url.clone()).ok_or_else(|| format!("{url}: no data"))
+}
+
 fn daemon_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(3))
@@ -156,25 +187,11 @@ fn daemon_agent() -> ureq::Agent {
 fn daemon_status() -> Result<serde_json::Value, String> {
     let agent = daemon_agent();
     let mut out = serde_json::json!({ "up": false, "version": null, "posture": null });
-    if let Ok(body) = agent
-        .get(format!("{DAEMON_ORIGIN}/v1/status").as_str())
-        .call()
-        .and_then(|r| r.into_string().map_err(|e| e.into()))
-    {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
-            out["up"] = serde_json::Value::Bool(true);
-            out["version"] = v["version"].clone();
-        }
-    }
-    if out["up"] == serde_json::Value::Bool(true) {
-        if let Ok(body) = agent
-            .get(format!("{DAEMON_ORIGIN}/v1/certmesh/posture").as_str())
-            .call()
-            .and_then(|r| r.into_string().map_err(|e| e.into()))
-        {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
-                out["posture"] = v["level"].clone();
-            }
+    if let Some(status) = get_json(&agent, format!("{DAEMON_ORIGIN}/v1/status")) {
+        out["up"] = serde_json::Value::Bool(true);
+        out["version"] = status["version"].clone();
+        if let Some(posture) = get_json(&agent, format!("{DAEMON_ORIGIN}/v1/certmesh/posture")) {
+            out["posture"] = posture["level"].clone();
         }
     }
     Ok(out)
@@ -326,22 +343,10 @@ fn read_breadcrumb() -> Option<(String, Option<String>)> {
 
 fn fetch_status_value(agent: &ureq::Agent, endpoint: &str) -> serde_json::Value {
     let mut out = serde_json::json!({ "up": true, "version": null, "posture": null });
-    if let Ok(body) = agent
-        .get(format!("{endpoint}/v1/status").as_str())
-        .call()
-        .and_then(|r| r.into_string().map_err(|e| e.into()))
-    {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
-            out["version"] = v["version"].clone();
-        }
-    }
-    if let Ok(body) = agent
-        .get(format!("{endpoint}/v1/certmesh/posture").as_str())
-        .call()
-        .and_then(|r| r.into_string().map_err(|e| e.into()))
-    {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
-            out["posture"] = v["level"].clone();
+    if let Some(status) = get_json(agent, format!("{endpoint}/v1/status")) {
+        out["version"] = status["version"].clone();
+        if let Some(posture) = get_json(agent, format!("{endpoint}/v1/certmesh/posture")) {
+            out["posture"] = posture["level"].clone();
         }
     }
     out
@@ -505,7 +510,7 @@ fn debug_log(message: String) {
                 .ok()
                 .map(|d| std::path::PathBuf::from(d).join("Koi"))
         })
-        .unwrap_or_else(|| std::env::temp_dir());
+        .unwrap_or_else(std::env::temp_dir);
     let _ = std::fs::create_dir_all(&dir);
     let line = format!(
         "[{}] {}\n",
@@ -803,4 +808,118 @@ fn hostname() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "koi".into())
+}
+
+#[cfg(test)]
+mod cycle1_guards {
+    // The daemon's SSE event kinds (koi-dashboard/src/forward.rs). Adding a
+    // kind there means adding its sentence here — the guard makes the drift
+    // loud at build time, not at the operator's desk.
+    const KNOWN_KINDS: &[&str] = &[
+        "mdns.found",
+        "mdns.resolved",
+        "mdns.removed",
+        "health.changed",
+        "dns.updated",
+        "dns.removed",
+        "dns.txt_updated",
+        "dns.txt_removed",
+        "certmesh.joined",
+        "certmesh.revoked",
+        "certmesh.destroyed",
+        "certmesh.cert_renewed",
+        "certmesh.cert_expiring_soon",
+        "certmesh.cert_renewal_failed",
+        "certmesh.bundle_updated",
+        "proxy.updated",
+        "proxy.removed",
+        "runtime.started",
+        "runtime.stopped",
+        "runtime.updated",
+        "runtime.disconnected",
+        "runtime.reconnected",
+    ];
+
+    const SENTENCES_JS: &str = include_str!("../ui/sentences.js");
+
+    #[test]
+    fn every_known_kind_has_a_sentence_entry_and_a_registry_view() {
+        for kind in KNOWN_KINDS {
+            assert!(
+                SENTENCES_JS.contains(&format!("\"{kind}\":")),
+                "sentences.js has no registry entry for {kind}"
+            );
+            assert!(
+                SENTENCES_JS.contains(&format!("case \"{kind}\":")),
+                "sentences.js has no sentence line for {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn sentences_js_declares_the_module_contract() {
+        assert!(SENTENCES_JS.contains("window.KoiSentences"));
+        assert!(SENTENCES_JS.contains("function sentenceFor("));
+        assert!(SENTENCES_JS.contains("function targetOf("));
+    }
+
+    #[test]
+    fn cross_host_get_refuses_nonsense() {
+        assert!(
+            super::validate_daemon_get("192.168.1.44", 16541, "/v1/mdns/browser/snapshot",).is_ok()
+        );
+        assert!(super::validate_daemon_get("", 16541, "/x").is_err());
+        assert!(super::validate_daemon_get("192.168.1.44/x", 16541, "/x").is_err());
+        assert!(super::validate_daemon_get("192.168.1.44", 0, "/x").is_err());
+        assert!(super::validate_daemon_get("192.168.1.44", 16541, "v1/x").is_err());
+        assert!(super::validate_daemon_get("192.168.1.44", 16541, "/x y").is_err());
+        let traversal = ["/x", "..", "y"].join("/");
+        assert!(traversal.contains(".."));
+        assert!(super::validate_daemon_get("192.168.1.44", 16541, &traversal).is_err());
+    }
+
+    /// Live acceptance (WP0): a sibling daemon's browse snapshot is reachable
+    /// with the exact command the workbench uses. Ignored by default; run
+    /// with `cargo test -- --ignored` while the LAN is up.
+    #[test]
+    #[ignore]
+    fn cross_host_get_reaches_brook() {
+        // Live acceptance (WP0): a sibling daemon answers the exact GET the
+        // workbench uses - either with its browse snapshot (browser mounted)
+        // or with a DECLARED capability skip (ADR-035: honest degradation).
+        // Both prove the per-node read; silence is the only failure. ureq
+        // wraps non-2xx inside Err(Status(code, response)), so both branches
+        // carry a parseable body. Ignored by default; run with
+        // `cargo test -- --ignored` while the LAN is up.
+        let target = super::validate_daemon_get("192.168.1.44", 5641, "/v1/mdns/browser/snapshot")
+            .expect("target should validate");
+        let response = super::daemon_agent().get(&target).call();
+        let (code, text) = match response {
+            Ok(response) => {
+                let code = response.status();
+                let text = response
+                    .into_string()
+                    .expect("sibling response should be text");
+                (code, text)
+            }
+            Err(ureq::Error::Status(code, response)) => {
+                let text = response.into_string().unwrap_or_default();
+                (code, text)
+            }
+            Err(e) => panic!("transport: {e}"),
+        };
+        let body: serde_json::Value =
+            serde_json::from_str(text.trim()).unwrap_or(serde_json::json!({}));
+        match code {
+            200 => assert!(
+                body.get("instances").is_some(),
+                "snapshot should carry instances"
+            ),
+            503 => assert_eq!(
+                body["error"], "capability_disabled",
+                "a declared skip is the only acceptable non-200: {body}"
+            ),
+            other => panic!("unexpected status {other}: {text}"),
+        }
+    }
 }
