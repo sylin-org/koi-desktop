@@ -1283,8 +1283,15 @@ function passageKey(r) {
 
 const passageCache = new Map(); // "host:port" → {state: "alive"|"dead", scheme, at}
 const passageInFlight = new Set();
+const passageQueue = [];
 const PASSAGE_TTL_MS = 10 * 60 * 1000;
+const PASSAGE_MAX_PROBES = 6; // be gentle: 30 simultaneous probes bother LAN gadgets
 let passageRenderQueued = false;
+
+function passagePaneActive() {
+  return document.getElementById("view-browser")?.classList.contains("active")
+    || document.getElementById("view-discover")?.classList.contains("active");
+}
 
 function composeUrl(r, schemeOverride) {
   const host = String(r.host || r.ip || "").replace(/\.$/, "").trim();
@@ -1299,17 +1306,28 @@ function composeUrl(r, schemeOverride) {
 function scheduleProbe(r) {
   const key = passageKey(r);
   if (!key || passageInFlight.has(key) || !invoke) return;
-  passageInFlight.add(key);
-  invoke("probe_http", { host: passageEndpointHost(r), port: Number(r.port) })
-    .then((scheme) => {
-      if (scheme) passageCache.set(key, { state: "alive", scheme, at: Date.now() });
-      else passageCache.set(key, { state: "dead", scheme: null, at: Date.now() });
-    })
-    .catch((error) => dlog(`probe ${key} failed: ${error}`))
-    .finally(() => {
-      passageInFlight.delete(key);
-      queuePassageRerender();
-    });
+  for (const q of passageQueue) if (q.key === key) return;
+  passageQueue.push({ key, host: passageEndpointHost(r), port: Number(r.port) });
+  pumpPassageProbes();
+}
+
+function pumpPassageProbes() {
+  while (passageInFlight.size < PASSAGE_MAX_PROBES && passageQueue.length) {
+    const { key, host, port } = passageQueue.shift();
+    if (passageInFlight.has(key)) continue;
+    passageInFlight.add(key);
+    invoke("probe_http", { host, port })
+      .then((scheme) => {
+        if (scheme) passageCache.set(key, { state: "alive", scheme, at: Date.now() });
+        else passageCache.set(key, { state: "dead", scheme: null, at: Date.now() });
+      })
+      .catch((error) => dlog(`probe ${key} failed: ${error}`))
+      .finally(() => {
+        passageInFlight.delete(key);
+        pumpPassageProbes();
+        queuePassageRerender();
+      });
+  }
 }
 
 // One render pass for however many probes land in the same tick.
@@ -1331,6 +1349,7 @@ function passageAllowedFor(r) {
   if (!key) return false;
   const entry = passageCache.get(key);
   if (entry && Date.now() - entry.at < PASSAGE_TTL_MS) return entry.state === "alive";
+  if (!passagePaneActive()) return false; // nothing off-screen is worth probing at boot
   scheduleProbe(r);
   return false;
 }

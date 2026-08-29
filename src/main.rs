@@ -221,10 +221,14 @@ fn validate_daemon_get(address: &str, port: u16, path: &str) -> Result<String, S
     Ok(format!("http://{address}:{port}{path}"))
 }
 
+/// ASYNC + spawn_blocking: a remote peer can take seconds to answer (or
+/// never), and sync commands hold the main thread.
 #[tauri::command]
-fn daemon_get(address: String, port: u16, path: String) -> Result<serde_json::Value, String> {
+async fn daemon_get(address: String, port: u16, path: String) -> Result<serde_json::Value, String> {
     let url = validate_daemon_get(&address, port, &path)?;
-    get_json_or_reason(&daemon_agent(), url)
+    tauri::async_runtime::spawn_blocking(move || get_json_or_reason(&daemon_agent(), url))
+        .await
+        .map_err(|e| format!("daemon_get task: {e}"))?
 }
 
 const UI_POKE_PORT: u16 = 5640;
@@ -700,7 +704,17 @@ fn certmesh_renew_self() -> Result<serde_json::Value, String> {
 /// with the invite secret (or a mesh TOTP), and install the signed cert
 /// locally with the pinned fingerprint. Mirrors `koi certmesh join`.
 #[tauri::command]
-fn certmesh_join(
+async fn certmesh_join(
+    endpoint: String,
+    invite: Option<String>,
+    totp: Option<String>,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || certmesh_join_blocking(endpoint, invite, totp))
+        .await
+        .map_err(|e| format!("join task: {e}"))?
+}
+
+fn certmesh_join_blocking(
     endpoint: String,
     invite: Option<String>,
     totp: Option<String>,
@@ -839,14 +853,20 @@ fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), Stri
 /// once an HTTP server has actually ANSWERED at the endpoint. HEAD first with
 /// GET as fallback; ANY status code counts (404/401 still mean "an HTTP server
 /// is listening" — the browser renders the page, we only claim the server).
-/// https is tried after http; a TLS-handshake failure stays unconfirmed rather
-/// than guessed (self-signed corners are F2's open question), so a dead port
-/// and an unprobeable port look the same to the UI: no button.
+/// GET is only tried when the server ANSWERED the HEAD badly (bad status/body
+/// line): a refused or timed-out connection would fail GET identically, so we
+/// skip it and stay fast. https is tried after http; a TLS-handshake failure
+/// stays unconfirmed rather than guessed (the self-signed corner is F2's open
+/// question), so a dead port and an unprobeable port look the same: no button.
 ///
 /// Returns the scheme that answered — the UI composes the URL from THIS, so
 /// the button never promises a scheme the probe did not verify.
+///
+/// ASYNC + spawn_blocking: blocking network I/O in a sync Tauri command runs
+/// on the MAIN thread and froze the UI when the boot render queued a probe
+/// per announcement (measured 2026-08-29). Heavy commands must yield.
 #[tauri::command]
-fn probe_http(host: String, port: u16) -> Result<Option<String>, String> {
+async fn probe_http(host: String, port: u16) -> Result<Option<String>, String> {
     let host = host.trim().trim_end_matches('.').to_string();
     if host.is_empty()
         || host.contains(['/', '\\', ' ', '@', '?', '#'])
@@ -859,9 +879,15 @@ fn probe_http(host: String, port: u16) -> Result<Option<String>, String> {
     if port == 0 {
         return Err("the endpoint port looks wrong".into());
     }
+    tauri::async_runtime::spawn_blocking(move || probe_http_blocking(host, port))
+        .await
+        .map_err(|e| format!("probe task: {e}"))?
+}
+
+fn probe_http_blocking(host: String, port: u16) -> Result<Option<String>, String> {
     let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(2))
-        .timeout(Duration::from_secs(3))
+        .timeout_connect(Duration::from_secs(1))
+        .timeout(Duration::from_secs(2))
         .build();
     for scheme in ["http", "https"] {
         let url = format!("{scheme}://{host}:{port}/");
@@ -875,15 +901,25 @@ fn probe_http(host: String, port: u16) -> Result<Option<String>, String> {
                 // Any response at all — even 404/405/500 — is an HTTP server.
                 Ok(_) => return Ok(Some(scheme.to_string())),
                 Err(ureq::Error::Status(_, _)) => return Ok(Some(scheme.to_string())),
-                // Transport failure: try the fallback method/scheme, then dead.
-                Err(_) => continue,
+                Err(ureq::Error::Transport(t))
+                    if matches!(
+                        t.kind(),
+                        ureq::ErrorKind::BadStatus | ureq::ErrorKind::BadHeader
+                    ) =>
+                {
+                    // Something answered but disliked HEAD — one GET retry.
+                    continue;
+                }
+                // Connect refused / timeout / TLS / DNS: GET would fail the
+                // same way, so this scheme is settled without the retry.
+                Err(_) => break,
             }
         }
     }
     Ok(None)
 }
 
-/// Care (cycle-1 WP8): one OS notification when a watched inhabitant fades.
+/// Passage (cycle-1 WP7): open a pond endpoint in the default browser.
 /// Only http(s) passes — an mDNS announcement never gets to execute anything.
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
