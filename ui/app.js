@@ -915,6 +915,18 @@ function browserRow(r) {
     browserExpandedKey = browserExpandedKey === k ? null : k;
     renderBrowser();
   });
+  if (!isFamily(r)) {
+    const invite = document.createElement("button");
+    invite.className = "row-remove trust-stranger";
+    invite.type = "button";
+    invite.textContent = "Trust…";
+    invite.title = "This announcer holds no invite from the pond — open the grant ceremony";
+    invite.addEventListener("click", (e) => {
+      e.stopPropagation();
+      trustStranger(r.instance_name || r.name || r.service_type);
+    });
+    node.append(invite);
+  }
   if (browserExpandedKey === k) node.append(browserDetail(r));
   return node;
 }
@@ -1173,6 +1185,220 @@ diff["diff-node-add"]?.addEventListener("click", () => {
 });
 
 diffRefreshSelects();
+
+// ── Trust pane (cycle-1 WP6): ceremony + audit ───────────────────────
+// Friction is the feature: the grant ceremony places BOTH fingerprints side
+// by side and the invite stays locked until the operator states they compared
+// them character by character. Revocation is armed (two clicks), labeled
+// grantor → grantee, and every action lands in the daemon's audit trail.
+const trust = {};
+for (const id of ["trust-note", "trust-role", "trust-detail", "trust-members-count",
+                  "trust-members", "invite-host", "invite-ttl", "invite-mint",
+                  "ceremony", "grant-label", "grant-consequence", "fp-ca", "fp-invite",
+                  "fp-compared", "invite-token", "invite-expires", "invite-note",
+                  "audit-log", "audit-refresh", "trust-refresh"]) {
+  trust[id] = document.getElementById(id);
+}
+let lastCertmeshStatus = null;
+
+// The invite code is `<secret>.<ca_fingerprint>` (ADR-017 F3) — the part
+// after the first separator is the fingerprint the joiner pins. Pure + tested.
+function fpPinOf(inviteToken) {
+  const s = String(inviteToken ?? "");
+  const i = s.indexOf(".");
+  return i >= 0 && i < s.length - 1 ? s.slice(i + 1) : null;
+}
+
+// The honest role this machine plays in the pond's trust.
+function trustRoleOf(status) {
+  if (!status) return { role: "unknown", detail: "The daemon did not answer." };
+  if (!status.ca_initialized) {
+    return {
+      role: "open node",
+      detail: "This machine holds no trust role yet — it has no CA and no identity. " +
+        "Create one with `koi certmesh create`, or join an existing CA with `koi certmesh join`.",
+    };
+  }
+  if (status.ca_locked) {
+    return { role: "CA (locked)", detail: "The CA is locked — unlock with `koi certmesh unlock` to mint invites." };
+  }
+  return {
+    role: "CA — the grantor",
+    detail: "This machine signs the pond's identities. Enrollment is " +
+      (status.enrollment_open ? "OPEN (new members can join)" : "closed (invites only)") + ".",
+  };
+}
+
+function trustNote(text, isError) {
+  if (!trust["trust-note"]) return;
+  trust["trust-note"].textContent = text || "";
+  trust["trust-note"].className = "action-note" + (isError ? " error" : "");
+}
+
+function shortFp(fp) {
+  const s = String(fp ?? "");
+  return s.length > 20 ? s.slice(0, 10) + "…" + s.slice(-8) : s;
+}
+
+function renderTrustMembers(status) {
+  const host = trust["trust-members"];
+  host.textContent = "";
+  const members = status?.members ?? [];
+  trust["trust-members-count"].textContent = `${members.length} member${members.length === 1 ? "" : "s"}`;
+  if (!status?.ca_initialized) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No CA on this machine — the roster would live here.";
+    host.append(empty);
+    return;
+  }
+  if (!members.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No members yet — mint an invite below to grant the first one.";
+    host.append(empty);
+    return;
+  }
+  for (const m of members) {
+    const node = document.createElement("div");
+    node.className = "row trust-member";
+    node.innerHTML =
+      `<div class="med-mini family">◆</div>` +
+      `<div class="row-tool">${escapeHtml(m.hostname)}</div>` +
+      `<div class="row-activity">${escapeHtml(m.role)} · ${escapeHtml(m.status)}` +
+      `<span class="sub"> · cert ${escapeHtml(shortFp(m.cert_fingerprint))}</span></div>` +
+      `<div class="row-client">${escapeHtml(String(m.cert_expires ?? "").slice(0, 10))}</div>` +
+      `<div class="row-cap"></div>`;
+    // The danger action is a real element (two-step armed), not innerHTML.
+    const revoke = document.createElement("button");
+    revoke.className = "row-remove danger-button";
+    revoke.type = "button";
+    revoke.textContent = "Revoke";
+    node.append(revoke);
+    revoke.addEventListener("click", async () => {
+      if (!invoke) { trustNote("Revocation needs the desktop workbench.", true); return; }
+      if (revoke.dataset.armed !== "yes") {
+        revoke.dataset.armed = "yes";
+        revoke.textContent = `Really revoke ${m.hostname}?`;
+        trustNote(`Revoking ${m.hostname} stops it from speaking our TLS. Click again to confirm.`, true);
+        setTimeout(() => { revoke.dataset.armed = ""; revoke.textContent = "Revoke"; }, 6000);
+        return;
+      }
+      try {
+        const out = await invoke("certmesh_revoke", { hostname: m.hostname,
+          reason: "revoked from the workbench" });
+        trustNote(out?.revoked
+          ? `${m.hostname} revoked — the pond retracts its trust.`
+          : `${m.hostname} could not be revoked.`, !out?.revoked);
+        refreshTrust();
+      } catch (error) {
+        trustNote(String(error), true);
+      }
+    });
+    host.append(node);
+  }
+}
+
+function renderTrust(status, diagnose) {
+  const role = trustRoleOf(status);
+  trust["trust-role"].textContent = role.role;
+  trust["trust-detail"].textContent = role.detail;
+  lastCertmeshStatus = status;
+  renderTrustMembers(status);
+}
+
+async function refreshTrust() {
+  if (!invoke) {
+    trust["trust-role"].textContent = "Trust lives in the desktop workbench";
+    trust["trust-detail"].textContent =
+      "The phone view can read the pond's public state; the ceremony and audit stay local.";
+    return;
+  }
+  let status = null;
+  try {
+    status = await invoke("certmesh_status");
+  } catch (error) {
+    trust["trust-role"].textContent = "The daemon did not answer";
+    trust["trust-detail"].textContent = String(error);
+    return;
+  }
+  let diagnose = null;
+  try { diagnose = await invoke("certmesh_diagnose"); } catch (_) {}
+  renderTrust(status, diagnose);
+}
+
+function closeCeremony() {
+  trust["ceremony"].hidden = true;
+  trust["fp-compared"].checked = false;
+}
+
+async function mintInvite() {
+  if (!invoke) { trustNote("The ceremony needs the desktop workbench.", true); return; }
+  const hostname = trust["invite-host"].value.trim();
+  if (!hostname) { trustNote("Name the member you are granting to.", true); return; }
+  const ttlRaw = trust["invite-ttl"].value.trim();
+  const ttl = ttlRaw === "" ? null : Number(ttlRaw);
+  if (ttl !== null && (!Number.isFinite(ttl) || ttl <= 0)) {
+    trustNote("Invite TTL must be a positive number of minutes.", true);
+    return;
+  }
+  trustNote("Minting…");
+  try {
+    const out = await invoke("certmesh_invite", { hostname, ttl_mins: ttl });
+    const tokenStr = String(out?.token ?? "");
+    const pin = fpPinOf(tokenStr);
+    const caFp = lastCertmeshStatus?.ca_fingerprint ?? "";
+    trust["grant-label"].textContent = `grant: this CA (${shortFp(caFp)}) → ${hostname}`;
+    trust["grant-consequence"].textContent =
+      `Signing gives ${hostname} a pond identity — valid TLS among members, ` +
+      "revocable anytime from this pane. The invite is single-use and expires.";
+    trust["fp-ca"].textContent = caFp || "(the daemon did not report a CA fingerprint)";
+    trust["fp-invite"].textContent = pin ?? "(no fingerprint pin found in the invite)";
+    trust["invite-token"].textContent = tokenStr;
+    trust["invite-expires"].textContent = String(out?.expires_at ?? "");
+    trust["ceremony"].hidden = false;
+    trustNote("Invite minted — but the ceremony is not done until the fingerprints are compared.");
+    refreshTrust();
+  } catch (error) {
+    trustNote(String(error), true);
+  }
+}
+
+trust["invite-mint"]?.addEventListener("click", mintInvite);
+trust["refresh"] = trust["trust-refresh"];
+trust["trust-refresh"]?.addEventListener("click", refreshTrust);
+trust["fp-compared"]?.addEventListener("change", (e) => {
+  // The invite is visible either way (hiding it would fake security) — the
+  // checkbox gates the *guidance*, acknowledging the comparison happened.
+  trust["invite-note"].textContent = e.target.checked
+    ? "Compared. Hand the invite to the member; on their machine: koi certmesh join <ca-endpoint> --invite <token>"
+    : "";
+});
+
+async function refreshAudit() {
+  if (!invoke) {
+    trust["audit-log"].textContent = "The audit trail stays in the desktop workbench.";
+    return;
+  }
+  try {
+    const out = await invoke("certmesh_log");
+    const entries = String(out?.entries ?? "");
+    trust["audit-log"].textContent = entries || "No audit entries yet — the diary starts with the first grant.";
+  } catch (error) {
+    trust["audit-log"].textContent = "Audit unavailable: " + error;
+  }
+}
+trust["audit-refresh"]?.addEventListener("click", refreshAudit);
+
+// Stranger flow (E6): an unknown announcer in the Browser pane arrives here
+// with its name prefilled. Nothing is granted without the full ceremony.
+function trustStranger(name) {
+  if (!trust["invite-host"]) return;
+  trust["invite-host"].value = String(name ?? "");
+  trustNote(`${name} announced itself and holds no invite from this pond. If it is yours, ` +
+    "mint it an invite; if it is not, doing nothing grants it nothing.");
+  gotoView("trust");
+}
 
 if (window.__TAURI__?.event?.listen) {
   // The Rust reader owns the real stream state; the UI never invents "live".

@@ -86,6 +86,11 @@ fn run() -> Result<()> {
                 dns_remove,
                 dns_txt_set,
                 dns_txt_clear,
+                certmesh_status,
+                certmesh_diagnose,
+                certmesh_log,
+                certmesh_invite,
+                certmesh_revoke,
                 status_events_start,
                 debug_log
             ])
@@ -465,6 +470,56 @@ fn daemon_json(
         return Ok(serde_json::json!({ "ok": true }));
     }
     serde_json::from_str(&text).map_err(|e| format!("{path} malformed: {e}"))
+}
+
+// ── Trust pane (cycle-1 WP6): the certmesh doors ────────────────────
+// Reads: status (GET-exempt by design — the joiner protocol depends on it),
+// diagnose (loopback-exempt), log (DAT-gated GET — the one audit read).
+// Mutations: invite/revoke are DAT-gated POSTs. All ride the breadcrumb
+// token exactly like the CLI; the server decides what each method may do.
+
+#[tauri::command]
+fn certmesh_status() -> Result<serde_json::Value, String> {
+    daemon_json("GET", "/v1/certmesh/status", None)
+}
+
+#[tauri::command]
+fn certmesh_diagnose() -> Result<serde_json::Value, String> {
+    daemon_json("GET", "/v1/certmesh/diagnose", None)
+}
+
+#[tauri::command]
+fn certmesh_log() -> Result<serde_json::Value, String> {
+    daemon_json("GET", "/v1/certmesh/log", None)
+}
+
+#[tauri::command]
+fn certmesh_invite(hostname: String, ttl_mins: Option<i64>) -> Result<serde_json::Value, String> {
+    let hostname = hostname.trim();
+    if hostname.is_empty() {
+        return Err("A grant needs the member's hostname.".into());
+    }
+    let mut body = serde_json::json!({ "hostname": hostname });
+    if let Some(ttl) = ttl_mins {
+        if ttl <= 0 {
+            return Err("Invite TTL must be a positive number of minutes.".into());
+        }
+        body["ttl_mins"] = serde_json::json!(ttl);
+    }
+    daemon_json("POST", "/v1/certmesh/invite", Some(body))
+}
+
+#[tauri::command]
+fn certmesh_revoke(hostname: String, reason: Option<String>) -> Result<serde_json::Value, String> {
+    let hostname = hostname.trim();
+    if hostname.is_empty() {
+        return Err("A revocation needs the member's hostname.".into());
+    }
+    daemon_json(
+        "POST",
+        "/v1/certmesh/revoke",
+        Some(serde_json::json!({ "hostname": hostname, "reason": reason })),
+    )
 }
 
 #[tauri::command]

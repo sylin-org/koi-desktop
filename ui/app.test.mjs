@@ -277,3 +277,48 @@ test("deaf verdict: renders from the snapshot into the browser pane", async () =
   assert.match(verdict.textContent, /Deaf\?/);
   assert.ok(verdict.className.includes("bad"));
 });
+
+// ── WP6: the trust pane ──────────────────────────────────────────────
+
+test("trust: invite pins are extracted from the token for the fingerprint compare", async () => {
+  const { ctx } = await boot();
+  const token = "deadbeef01.4a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d";
+  assert.equal(probe(ctx, `fpPinOf(${JSON.stringify(token)})`), "4a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d");
+  // trailing separator degrades to a bare secret (no pin)
+  assert.equal(probe(ctx, `fpPinOf("deadbeef01.")`), null);
+  assert.equal(probe(ctx, `fpPinOf("no-separator")`), null);
+  assert.equal(probe(ctx, `fpPinOf(null)`), null);
+});
+
+test("trust: the pane names the machine's honest role", async () => {
+  const { ctx, document } = await boot();
+  const role = (status) => probe(ctx, `trustRoleOf(${JSON.stringify(status)})`);
+  assert.match(role(null).role, /unknown/);
+  assert.match(role({ ca_initialized: false }).role, /open node/);
+  assert.match(role({ ca_initialized: true, ca_locked: true }).role, /locked/);
+  const active = role({ ca_initialized: true, ca_locked: false, enrollment_open: false });
+  assert.match(active.role, /CA — the grantor/);
+  assert.match(active.detail, /closed/);
+
+  // the pane renders an open node truthfully, no invented roster
+  probe(ctx, `renderTrust({ ca_initialized: false, members: [] }, null)`);
+  assert.match(document.getElementById("trust-role").textContent, /open node/);
+  const members = [...document.getElementById("trust-members").children]
+    .map((n) => n.className);
+  assert.ok(members.some((c) => c === "empty"), "no invented member rows");
+});
+
+test("trust: members render with a two-step armed revoke", async () => {
+  const { ctx, document } = await boot();
+  probe(ctx, `renderTrust({
+    ca_initialized: true, ca_locked: false, enrollment_open: false,
+    members: [{ hostname: "forge", role: "member", status: "active",
+                cert_fingerprint: "aa11bb22cc33dd44ee55ff6677889900aabbccdd",
+                cert_expires: "2026-09-04T00:00:00Z" }],
+  }, null)`);
+  const rows = [...document.getElementById("trust-members").children]
+    .filter((n) => n.className.startsWith("row trust-member"));
+  assert.equal(rows.length, 1);
+  const btn = rows[0].querySelector(".row-remove");
+  assert.equal(btn.textContent, "Revoke", "first click arms, does not revoke");
+});

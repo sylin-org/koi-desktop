@@ -24,6 +24,7 @@
         <button class="tab" type="button" data-view="discover">Discover</button>
         <button class="tab" type="button" data-view="browser">Browser</button>
         <button class="tab" type="button" data-view="diff">Diff</button>
+        <button class="tab" type="button" data-view="trust">Trust</button>
         <button class="tab" type="button" data-view="dns">DNS</button>
         <button class="tab" type="button" data-view="status">Status</button>
         <button class="tab" type="button" data-view="about">About</button>
@@ -58,6 +59,85 @@
           <span>Latest happenings</span>
         </div>
         <div id="glance-happenings" class="status-stream" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- ── Trust (ceremony + audit) ───────────────────────────────── -->
+    <section class="view" id="view-trust" data-page="trust" aria-label="Trust">
+      <div style="padding: 26px 40px;">
+        <div class="page-heading">
+          <div>
+            <span class="kicker">Who the pond trusts, and why</span>
+            <h1>Trust</h1>
+            <p>Every grant is labeled and revocable; every grant, revocation and renewal
+               lands in the audit trail. Friction here is deliberate.</p>
+          </div>
+          <button class="ghost-button" type="button" id="trust-refresh">Refresh</button>
+        </div>
+        <p class="action-note" id="trust-note"></p>
+
+        <article class="strip" id="trust-state">
+          <div>
+            <h2 id="trust-role">Reading the pond's trust…</h2>
+            <p id="trust-detail">…</p>
+          </div>
+          <div class="hero-side">
+            <div id="trust-members-count" class="queue-meta"></div>
+          </div>
+        </article>
+
+        <div class="queue-head"><span>Members of this CA</span></div>
+        <div class="queue" id="trust-members"></div>
+
+        <div class="queue-head"><span>Grant ceremony</span>
+          <span class="queue-meta">two fingerprints, compared by you — never auto-trusted</span>
+        </div>
+        <article class="strip trust-form">
+          <div class="form-grid four">
+            <label class="field"><span class="kicker">Member hostname</span>
+              <input id="invite-host" class="filter-input wide" placeholder="forge.internal" autocomplete="off" spellcheck="false" />
+            </label>
+            <label class="field"><span class="kicker">Invite TTL (minutes)</span>
+              <input id="invite-ttl" class="filter-input wide" placeholder="1440" autocomplete="off" spellcheck="false" />
+            </label>
+            <button class="ghost-button" type="button" id="invite-mint">Mint invite</button>
+          </div>
+        </article>
+        <div id="ceremony" hidden>
+          <article class="strip">
+            <div>
+              <h2 id="grant-label">grant</h2>
+              <p id="grant-consequence"></p>
+            </div>
+          </article>
+          <div class="fp-compare">
+            <div class="fp-box">
+              <span class="kicker">Your CA's fingerprint (this side)</span>
+              <code id="fp-ca" class="mono"></code>
+            </div>
+            <div class="fp-box">
+              <span class="kicker">Fingerprint the joiner will see (invite pin)</span>
+              <code id="fp-invite" class="mono"></code>
+            </div>
+          </div>
+          <p class="action-note">Compare the two fingerprints character by character — out loud, if it helps.
+            This is the one step that makes a man-in-the-middle visible.</p>
+          <label class="autostart">
+            <input type="checkbox" id="fp-compared" />
+            <span>I compared these fingerprints character by character</span>
+          </label>
+          <div class="queue-head"><span>The invite (single-use, expires)</span>
+            <span id="invite-expires" class="queue-meta"></span>
+          </div>
+          <code id="invite-token" class="mono invite-token"></code>
+          <p class="action-note" id="invite-note"></p>
+        </div>
+
+        <div class="queue-head">
+          <span>Audit trail</span>
+          <button class="ghost-button" type="button" id="audit-refresh">Refresh audit</button>
+        </div>
+        <pre id="audit-log" class="audit-log">Reading…</pre>
       </div>
     </section>
 
