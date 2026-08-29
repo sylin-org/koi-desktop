@@ -112,7 +112,7 @@ test("glance: digest shows the honest present until happenings exist", async () 
   const digest = document.getElementById("glance-digest");
   assert.equal(digest.hidden, false);
   assert.match(digest.textContent, /Right now: 0 inhabitants/);
-  assert.match(digest.textContent, /daemon down/);
+  assert.match(digest.textContent, /service down/);
   probe(ctx, `feedAdmit({kind:"mdns.found", line:"printer appeared", tone:"info", target:"discover", subject:"announcement:printer"})`);
   assert.equal(digest.hidden, true, "real happenings retire the digest");
 });

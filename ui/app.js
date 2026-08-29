@@ -72,17 +72,17 @@ function applyStatus(snap, svc) {
 
   // header lamp — Ghostlight drives states through body classes
   document.body.classList.toggle("runtime-offline", !up);
-  el["state-word"].textContent = up ? "Calm" : "No daemon";
+  el["state-word"].textContent = up ? "Calm" : "No service";
   el["state-facts"].textContent = up
     ? "http 127.0.0.1:5641 · posture " + level
-    : "no daemon on this machine";
+    : "the koi service is not running on this machine";
 
   // service strip
   el["service-state"].textContent = svc.running
     ? "Service running"
     : svc.installed ? "Service installed but stopped" : "Service not running";
   el["service-detail"].textContent = svc.running
-    ? "The Koi daemon is serving on standard ports."
+    ? "The Koi service is running and serving."
     : svc.installed
       ? "Installed as a system service; start it below."
       : "Not installed as a service yet — run it once on demand, or install with `koi install`.";
@@ -805,7 +805,7 @@ function glanceDigest() {
   return (
     "Right now: " + live + " inhabitant" + (live === 1 ? "" : "s") +
     " across " + types + " type" + (types === 1 ? "" : "s") +
-    " · daemon " + (up ? "up" : "down")
+    " · service " + (up ? "up" : "down")
   );
 }
 
@@ -1363,7 +1363,7 @@ async function refreshGlass() {
   }
   const rungs = status?.capabilities ?? [];
   glass["glass-meta"].textContent =
-    `${rungs.length} rungs · daemon up ${status?.uptime_secs ?? "?"}s · ` +
+    `${rungs.length} rungs · service up ${status?.uptime_secs ?? "?"}s · ` +
     `version ${status?.version ?? "?"} · measured just now`;
   for (const cap of rungs) host.append(glassRow(cap));
   if (!rungs.length) {
