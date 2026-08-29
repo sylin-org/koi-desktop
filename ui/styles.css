@@ -861,3 +861,12 @@ body.readonly .row-remove { display: none !important; }
 body.readonly .readonly-badge { display: inline-block; padding: 2px 10px;
   border-radius: 10px; font-size: 12px; color: var(--dim, #8b8b94);
   border: 1px solid var(--dim, #8b8b94); }
+
+/* ── At a glance (cycle 1 WP2): the quick read ──────────────────────── */
+#glance-hero { margin: 0 0 14px 0; }
+#glance-hero[data-tone="warn"] { border-color: var(--attention, #fbbf24); }
+#glance-count { color: var(--muted); font: 400 11px/1 var(--mono); }
+.hap-group-head {
+  margin: 14px 2px 4px; color: var(--dim, #8b8b94);
+  font: 500 9px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase;
+}

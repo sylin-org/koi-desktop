@@ -47,6 +47,7 @@ for (const id of [
 ]) el[id] = document.getElementById(id);
 
 let lastSignature = "";
+let latestSnap = null; // the most recent daemon snapshot, for glance digest facts
 
 function setFact(node, text, tone) {
   if (!node) return;
@@ -64,6 +65,7 @@ function note(text, isError) {
 let lastStatus = null;
 
 function applyStatus(snap, svc) {
+  latestSnap = snap;
   const up = snap.up === true;
   const level = snap.posture ? postureWord(snap.posture) : "—";
   const version = snap.version ? String(snap.version) : "—";
@@ -98,6 +100,7 @@ function applyStatus(snap, svc) {
   setFact(el["f-posture"], level, up ? "ok" : "down");
   setFact(el["f-version"], version);
   el["card-version"].textContent = version !== "—" ? version.split(".").slice(0, 2).join(".") : "—";
+  feedNotify(); // glance digest mirrors daemon facts
 }
 
 if (BROWSER_MODE) {
@@ -504,6 +507,7 @@ async function seedSnapshot() {
   }
   updateDiscoverTiles();
   refreshTypeDropdown();
+  feedNotify(); // glance digest mirrors discovery facts
 }
 
 async function startDiscover() {
@@ -578,49 +582,6 @@ document.getElementById("ping-pond")?.addEventListener("click", async () => {
   }
 });
 
-function updateDiscoverTiles() {
-  const types = new Set([...instances.values()].map((r) => r.service_type));
-  setFact(el["t-types"], String(types.size), types.size ? "ok" : "down");
-  setFact(el["t-instances"], String(instances.size), instances.size ? "ok" : "");
-  setFact(el["t-stream"], streamState, streamState === "live" ? "ok" : streamState === "connecting" ? "" : "down");
-}
-
-async function seedSnapshot() {
-  try {
-    const snap = await fetchDiscoverSnapshot();
-    dlog(`snapshot ok: instances=${(snap.instances ?? []).length}`);
-    for (const r of snap.instances ?? []) upsertInstance(r);
-  } catch (error) {
-    streamState = "offline";
-    dlog(`snapshot unavailable: ${error}`);
-  }
-  updateDiscoverTiles();
-}
-
-async function startDiscover() {
-  try { await invoke("discover_start"); } catch (error) { dlog(`discover_start failed: ${error}`); }
-  await seedSnapshot();
-}
-
-if (window.__TAURI__?.event?.listen) {
-  window.__TAURI__.event.listen("mdns-event", (event) => {
-    const payload = event.payload ?? {};
-    switch (payload.kind) {
-      case "resolved":
-        if (payload.data) { upsertInstance(payload.data); }
-        break;
-      case "removed":
-        dropInstance(payload.data ?? {});
-        break;
-      case "type_found":
-        updateDiscoverTiles();
-        break;
-      default:
-        break;
-    }
-  });
-}
-
 // The card's sheen and foil follow the pointer, and let go when it leaves.
 // Two numbers per move; the compositor does the rest (Ghostlight's port).
 function armCard() {
@@ -639,6 +600,217 @@ function armCard() {
   card.addEventListener("pointerleave", () => card.style.setProperty("--holo", "0"));
 }
 
+// ── The feed (cycle-1 WP0/WP2): one sentence stream, two surfaces ────
+// Status renders it as the streaming hero; At a glance recounts it. The
+// store holds no DOM — panes subscribe and render from it. Flapping stays
+// ONE row + count per 90s window; the cap keeps the diary bounded.
+const KS = window.KoiSentences;
+const FLAP_MS = 90 * 1000;
+const STREAM_CAP = 50;
+
+const feed = {
+  rows: [],          // newest first: {ts, line, tone, target, subject, kind}
+  flap: new Map(),   // subject → {count, until, line, tone, target}
+  watched: new Set(),
+  degraded: [],      // attention lines, derived on every admit
+  listeners: new Set(),
+};
+try { feed.watched = new Set(JSON.parse(localStorage.getItem("koi-watched") || "[]")); } catch (_) {}
+
+function feedNotify() {
+  feed.degraded = feed.rows
+    .filter((r) => r.tone === "bad" || r.tone === "warn")
+    .map((r) => r.line)
+    .slice(0, 4);
+  for (const fn of feed.listeners) {
+    try { fn(); } catch (e) { dlog(`feed listener failed: ${e}`); }
+  }
+}
+
+function feedAdmit(entry) {
+  // Flapping: the same subject restarting inside the window is ONE row + count.
+  const prior = feed.flap.get(entry.subject);
+  const restart = entry.kind === "runtime.started" || entry.kind === "runtime.stopped";
+  if (prior && Date.now() < prior.until && restart) {
+    prior.count += 1;
+    prior.until = Date.now() + FLAP_MS;
+    const existing = feed.rows.find((r) => r.subject === entry.subject);
+    if (existing) {
+      existing.ts = Date.now();
+      existing.line = prior.line + " — " + prior.count + " times in the last 90s";
+      feedNotify();
+      return;
+    }
+  }
+  if (restart) {
+    feed.flap.set(entry.subject, {
+      count: 1, until: Date.now() + FLAP_MS,
+      line: prior ? prior.line : entry.line, tone: entry.tone, target: entry.target,
+    });
+  }
+  feed.rows.unshift({
+    ts: Date.now(), line: entry.line, tone: entry.tone,
+    target: entry.target, subject: entry.subject, kind: entry.kind,
+  });
+  if (feed.rows.length > STREAM_CAP) feed.rows.length = STREAM_CAP;
+  feedNotify();
+}
+
+function feedWatchedSave() {
+  localStorage.setItem("koi-watched", JSON.stringify([...feed.watched]));
+}
+
+function feedPin(subject) {
+  feed.watched.add(subject);
+  feedWatchedSave();
+  feedNotify();
+}
+
+function feedUnpin(subject) {
+  feed.watched.delete(subject);
+  feedWatchedSave();
+  feedNotify();
+}
+
+function gotoView(view) {
+  const tab = document.querySelector('.tab[data-view="' + view + '"]');
+  if (tab) tab.click();
+}
+
+// ── At a glance (cycle-1 WP2): the quick read ────────────────────────
+// Hero: attention → watched → quiet (B1). Happenings: the feed deduplicated,
+// newest first (B2); every row click-throughs via the registry's target (B3).
+// "Since you last looked" is honest diary depth: rows observed since the last
+// time this pane was actually open (B4). No invented history across runs —
+// until this session has happenings, the digest states the pond's present.
+const glance = {};
+for (const id of ["glance-word", "glance-detail", "glance-pins", "glance-count",
+                  "glance-digest", "glance-happenings"]) {
+  glance[id] = document.getElementById(id);
+}
+
+let glanceSince = Number(localStorage.getItem("koi-glance-seen") || 0);
+
+function glanceIsActive() {
+  return document.getElementById("view-glance")?.classList.contains("active");
+}
+
+function glanceMarkSeen() {
+  glanceSince = Date.now();
+  try { localStorage.setItem("koi-glance-seen", String(glanceSince)); } catch (_) {}
+}
+
+function glanceDedupe() {
+  // Grouped + deduplicated: consecutive rows about the same subject collapse
+  // into one row with a count. The feed iterates newest-first, so the kept
+  // row already holds the latest sentence — older rows only add their count.
+  const out = [];
+  for (const row of feed.rows) {
+    const prev = out[out.length - 1];
+    if (prev && prev.subject === row.subject && prev.kind === row.kind) {
+      prev.count += 1;
+      continue;
+    }
+    out.push({ ...row, count: 1 });
+  }
+  return out;
+}
+
+function glanceDigest() {
+  const all = [...instances.values()];
+  const live = all.filter((r) => presence(r) !== "gone").length;
+  const types = new Set(all.map((r) => r.service_type)).size;
+  const up = latestSnap?.up === true;
+  return (
+    "The pond right now: " + live + " inhabitant" + (live === 1 ? "" : "s") +
+    " across " + types + " type" + (types === 1 ? "" : "s") +
+    " · daemon " + (up ? "up" : "down")
+  );
+}
+
+function glanceRow(row) {
+  const div = document.createElement("div");
+  div.className = "stream-row";
+  div.dataset.tone = row.tone;
+  const ago = document.createElement("span");
+  ago.className = "ago";
+  ago.textContent = agoText(row.ts);
+  const line = document.createElement("span");
+  line.className = "line";
+  line.textContent = row.count > 1 ? row.line + "  ×" + row.count : row.line;
+  div.append(ago, line);
+  div.addEventListener("click", () => gotoView(row.target));
+  return div;
+}
+
+function renderGlance() {
+  const happenings = glance["glance-happenings"];
+  if (!happenings) return;
+
+  // hero: attention → watched → quiet (B1)
+  glance["glance-pins"].textContent = "";
+  for (const subject of feed.watched) {
+    const b = document.createElement("button");
+    b.className = "hero-pin";
+    b.type = "button";
+    b.textContent = "📌 " + subject;
+    b.addEventListener("click", () => feedUnpin(subject));
+    glance["glance-pins"].appendChild(b);
+  }
+  const attention = feed.degraded;
+  if (attention.length) {
+    glance["glance-word"].textContent = "Needs you";
+    glance["glance-detail"].textContent = attention.join(" · ");
+    glance["glance-word"].closest(".strip")?.setAttribute("data-tone", "warn");
+  } else if (feed.watched.size) {
+    glance["glance-word"].textContent = "Pond is living";
+    glance["glance-detail"].textContent =
+      "watching " + feed.watched.size + " subject(s)";
+    glance["glance-word"].closest(".strip")?.removeAttribute("data-tone");
+  } else {
+    glance["glance-word"].textContent = "All quiet";
+    glance["glance-detail"].textContent = "nothing needs you right now";
+    glance["glance-word"].closest(".strip")?.removeAttribute("data-tone");
+  }
+  glance["glance-count"].textContent = feed.rows.length + " this session";
+
+  // digest (B4): only until the session has real happenings to show
+  const digest = glance["glance-digest"];
+  if (!feed.rows.length) {
+    digest.hidden = false;
+    digest.textContent = glanceDigest();
+  } else {
+    digest.hidden = true;
+  }
+
+  // happenings (B2), grouped since-last-visit vs. the rest of the session
+  happenings.textContent = "";
+  const since = [];
+  const session = [];
+  for (const row of glanceDedupe()) {
+    (glanceSince && row.ts > glanceSince ? since : session).push(row);
+  }
+  for (const group of [{ label: "Since you last looked", rows: since },
+                       { label: "This session", rows: session }]) {
+    if (!group.rows.length) continue;
+    const head = document.createElement("div");
+    head.className = "hap-group-head";
+    head.textContent = group.label;
+    happenings.append(head);
+    for (const row of group.rows) happenings.append(glanceRow(row));
+  }
+  if (!feed.rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "Nothing has happened yet — happenings collect here as the pond lives.";
+    happenings.append(empty);
+  }
+
+  // Rows just rendered on an open pane are seen; the diary mark is honest.
+  if (glanceIsActive()) glanceMarkSeen();
+}
+feed.listeners.add(renderGlance);
+
 if (window.__TAURI__?.event?.listen) {
   // The Rust reader owns the real stream state; the UI never invents "live".
   window.__TAURI__.event.listen("discover-stream", (event) => {
@@ -653,57 +825,48 @@ if (window.__TAURI__?.event?.listen) {
       .finally(() => applyStatus(event.payload ?? { up: false }, svc));
   });
   // ── Status streaming hero (cycle-1 WP1) ──
-  // Sentences stream newest-first; watched subjects pin; a restart storm is
-  // ONE flapping row, not N; a settled window leaves the designed quiet state.
-  const KS = window.KoiSentences;
-  const streamRows = [];            // newest first: {ts, line, tone, target, subject}
-  const flap = new Map();           // subject → {count, until, line, tone, target}
-  const FLAP_MS = 90 * 1000;
-  const STREAM_CAP = 50;
-  let watched = new Set();
-  try { watched = new Set(JSON.parse(localStorage.getItem("koi-watched") || "[]")); } catch (_) {}
-
+  // The feed is shared (At a glance recounts it); this pane renders the
+  // streaming hero: sentences newest-first, watched pins, flapping as ONE
+  // row + count, and the designed quiet state when nothing needs anyone.
   const heroWord = document.getElementById("hero-word");
   const heroDetail = document.getElementById("hero-detail");
   const heroPins = document.getElementById("hero-pins");
   const heroAttention = document.getElementById("hero-attention");
-  const heroNote = document.getElementById("hero-note");
   const streamNode = document.getElementById("status-stream");
+  const statusHero = document.getElementById("status-hero");
 
-  function renderHero(degraded) {
-    const pins = [...watched];
-    const attention = degraded.slice(0, 4);
+  function renderStatusHero() {
     heroPins.textContent = "";
-    for (const subject of pins) {
+    for (const subject of feed.watched) {
       const b = document.createElement("button");
       b.className = "hero-pin";
       b.type = "button";
       b.textContent = "📌 " + subject;
-      b.addEventListener("click", () => unpin(subject));
+      b.addEventListener("click", () => feedUnpin(subject));
       heroPins.appendChild(b);
     }
+    const attention = feed.degraded;
     heroAttention.textContent = attention.join(" · ");
     if (attention.length) {
       heroWord.textContent = "Needs you";
       heroDetail.textContent = attention[0];
-      document.getElementById("status-hero").dataset.tone = "warn";
-    } else if (streamRows.length || pins.length) {
+      statusHero.dataset.tone = "warn";
+    } else if (feed.rows.length || feed.watched.size) {
       heroWord.textContent = "Pond is living";
-      heroDetail.textContent = pins.length
-        ? "watching " + pins.length + " subject(s); everything else flows past"
+      heroDetail.textContent = feed.watched.size
+        ? "watching " + feed.watched.size + " subject(s); everything else flows past"
         : "events stream as they happen";
-      delete document.getElementById("status-hero").dataset.tone;
+      delete statusHero.dataset.tone;
     } else {
-      heroWord.textContent = "Watching the pond";
-      heroDetail.textContent = "events land here as they happen, newest first";
-      delete document.getElementById("status-hero").dataset.tone;
+      heroWord.textContent = "All quiet";
+      heroDetail.textContent = "nothing needs you";
+      delete statusHero.dataset.tone;
     }
   }
 
-  function renderStream() {
+  function renderStatusStream() {
     streamNode.textContent = "";
-    const now = Date.now();
-    for (const row of streamRows) {
+    for (const row of feed.rows) {
       const div = document.createElement("div");
       div.className = "stream-row";
       div.dataset.tone = row.tone;
@@ -714,83 +877,25 @@ if (window.__TAURI__?.event?.listen) {
       line.className = "line";
       line.textContent = row.line;
       const pin = document.createElement("button");
-      pin.className = "pin" + (watched.has(row.subject) ? " pinned" : "");
+      pin.className = "pin" + (feed.watched.has(row.subject) ? " pinned" : "");
       pin.type = "button";
-      pin.title = watched.has(row.subject) ? "unpin" : "pin to the hero";
-      pin.textContent = watched.has(row.subject) ? "★" : "☆";
+      pin.title = feed.watched.has(row.subject) ? "unpin" : "pin to the hero";
+      pin.textContent = feed.watched.has(row.subject) ? "★" : "☆";
       pin.addEventListener("click", (e) => {
         e.stopPropagation();
-        watched.has(row.subject) ? unpin(row.subject) : pin(row.subject);
+        feed.watched.has(row.subject) ? feedUnpin(row.subject) : feedPin(row.subject);
       });
       div.append(ago, line, pin);
-      div.addEventListener("click", () => gotoView(KoiSentences.targetOf(row.target)));
+      // Click-through is the view registry's target (B3): the sentence
+      // already carries the pane that owns this subject.
+      div.addEventListener("click", () => gotoView(row.target));
       streamNode.appendChild(div);
     }
-    if (!streamRows.length && !streamNode.querySelector(".stream-row")) {
-      // :empty ::after renders the quiet copy; nothing to do
-    }
-    renderHero(collectDegraded());
+    renderStatusHero();
   }
 
-  function collectDegraded() {
-    const out = [];
-    for (const row of streamRows.slice(0, 20)) {
-      if (row.tone === "bad" || row.tone === "warn") out.push(row.line);
-      if (out.length >= 4) break;
-    }
-    return out;
-  }
-
-  function unpin(subject) {
-    watched.delete(subject);
-    saveWatched();
-    renderStream();
-  }
-
-  function pin(subject) {
-    watched.add(subject);
-    localStorage.setItem("koi-watched", JSON.stringify([...watched]));
-    renderStream();
-  }
-
-  function saveWatched() {
-    localStorage.setItem("koi-watched", JSON.stringify([...watched]));
-  }
-
-  function admitToStream(entry) {
-    // Flapping: the same subject restarting inside the window is ONE row + count.
-    const prior = flap.get(entry.subject);
-    if (prior && Date.now() < prior.until &&
-        (entry.kind === "runtime.started" || entry.kind === "runtime.stopped")) {
-      prior.count += 1;
-      prior.until = Date.now() + FLAP_MS;
-      const existing = streamRows.find((r) => r.flapKey === entry.subject);
-      if (existing) {
-        existing.ts = Date.now();
-        existing.line = prior.line + " — " + prior.count + " times in the last 90s";
-        renderStream();
-        return;
-      }
-    }
-    if (entry.kind === "runtime.started" || entry.kind === "runtime.stopped") {
-      flap.set(entry.subject, {
-        count: 1, until: Date.now() + FLAP_MS,
-        line: prior ? prior.line : entry.line, tone: entry.tone, target: entry.target,
-      });
-    }
-    streamRows.unshift({
-      ts: Date.now(), line: entry.line, tone: entry.tone,
-      target: entry.target, subject: entry.subject,
-      kind: entry.kind, flapKey: entry.subject,
-    });
-    if (streamRows.length > STREAM_CAP) streamRows.length = STREAM_CAP;
-    renderStream();
-  }
-
-  function gotoView(view) {
-    const tab = document.querySelector('.tab[data-view="' + view + '"]');
-    if (tab) tab.click();
-  }
+  feed.listeners.add(renderStatusStream);
+  renderStatusStream();
 
   // Domain events: forwarded wire events (dns.*, certmesh.*, mdns.* …).
   // A loopback poke (127.0.0.1:5640/poke) means something local just changed
@@ -810,12 +915,9 @@ if (window.__TAURI__?.event?.listen) {
     // DNS changes push: the table re-reads instead of polling.
     if (kind.startsWith("dns.")) loadDns();
     const s = KS.sentenceFor(kind, payload.data);
-    admitToStream({ kind, line: s.line, tone: s.tone, target: s.target,
-                    subject: KS.subjectOf(kind, payload.data) });
+    feedAdmit({ kind, line: s.line, tone: s.tone, target: s.target,
+                subject: KS.subjectOf(kind, payload.data) });
   });
-
-  // Hero admission: watched subjects render even with an empty stream.
-  renderStream();
 } else {
   dlog("tauri event API unavailable — falling back to reconcile-only");
 }

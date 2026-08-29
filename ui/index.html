@@ -20,7 +20,8 @@
       </div>
 
       <nav class="tabs" aria-label="Koi">
-        <button class="tab active" type="button" data-view="discover" aria-current="page">Discover</button>
+        <button class="tab active" type="button" data-view="glance" aria-current="page">Glance</button>
+        <button class="tab" type="button" data-view="discover">Discover</button>
         <button class="tab" type="button" data-view="dns">DNS</button>
         <button class="tab" type="button" data-view="status">Status</button>
         <button class="tab" type="button" data-view="about">About</button>
@@ -28,6 +29,36 @@
     </header>
 
     <main id="main-content">
+    <!-- ── Glance (the quick read) ───────────────────────────────── -->
+    <section class="view active" id="view-glance" data-page="glance" aria-label="At a glance">
+      <div style="padding: 26px 40px;">
+        <div class="page-heading">
+          <div>
+            <span class="kicker">The quick read</span>
+            <h1>At a glance</h1>
+            <p>What the pond is doing and what happened while you were away.</p>
+          </div>
+          <span id="glance-count" class="queue-meta"></span>
+        </div>
+
+        <article class="strip" id="glance-hero">
+          <div>
+            <h2 id="glance-word">Watching the pond</h2>
+            <p id="glance-detail">Reading the pond…</p>
+          </div>
+          <div class="hero-side">
+            <div id="glance-pins" class="hero-pins"></div>
+          </div>
+        </article>
+        <p class="action-note" id="glance-digest" hidden></p>
+
+        <div class="queue-head">
+          <span>Latest happenings</span>
+        </div>
+        <div id="glance-happenings" class="status-stream" aria-live="polite"></div>
+      </div>
+    </section>
+
     <!-- ── DNS ────────────────────────────────────────────────────── -->
     <section class="view" id="view-dns" data-page="dns" aria-label="DNS">
       <div class="page-heading">
@@ -79,7 +110,7 @@
     </section>
 
     <!-- ── Discover ───────────────────────────────────────────────── -->
-    <section class="view active" id="view-discover" data-page="discover" aria-label="Discover">
+    <section class="view" id="view-discover" data-page="discover" aria-label="Discover">
       <div class="page-heading">
         <div>
           <span class="kicker">Live mDNS discovery on your LAN</span>
