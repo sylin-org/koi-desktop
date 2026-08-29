@@ -79,7 +79,7 @@ test("glance: hero is attention → watched → quiet, in that order", async () 
   // attention clears → watched holds the hero even with an empty stream
   probe(ctx, `feed.rows.length = 0; feedNotify();`);
   probe(ctx, `feedPin("container:forge")`);
-  assert.equal(word(), "Pond is living");
+  assert.equal(word(), "Active");
   assert.equal(document.getElementById("glance-hero").getAttribute("data-tone"), null);
 
   // unpin → quiet again
@@ -111,7 +111,7 @@ test("glance: digest shows the honest present until happenings exist", async () 
   const { ctx, document } = await boot();
   const digest = document.getElementById("glance-digest");
   assert.equal(digest.hidden, false);
-  assert.match(digest.textContent, /The pond right now: 0 inhabitants/);
+  assert.match(digest.textContent, /Right now: 0 inhabitants/);
   assert.match(digest.textContent, /daemon down/);
   probe(ctx, `feedAdmit({kind:"mdns.found", line:"printer appeared", tone:"info", target:"discover", subject:"announcement:printer"})`);
   assert.equal(digest.hidden, true, "real happenings retire the digest");

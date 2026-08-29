@@ -72,7 +72,7 @@ function applyStatus(snap, svc) {
 
   // header lamp — Ghostlight drives states through body classes
   document.body.classList.toggle("runtime-offline", !up);
-  el["state-word"].textContent = up ? "Calm waters" : "Quiet pond";
+  el["state-word"].textContent = up ? "Calm" : "No daemon";
   el["state-facts"].textContent = up
     ? "http 127.0.0.1:5641 · posture " + level
     : "no daemon on this machine";
@@ -169,7 +169,7 @@ document.getElementById("btn-phone")?.addEventListener("click", async () => {
     const svg = await invoke("pond_qr_svg", { url });
     qrSvg.innerHTML = svg;
     qrUrl.textContent = url;
-    qrNote.textContent = "Scan to open this pond read-only on any screen on this network.";
+    qrNote.textContent = "Scan to open this view read-only on any screen on this network.";
   } catch (error) {
     qrNote.textContent = `QR failed: ${error}`;
   }
@@ -803,7 +803,7 @@ function glanceDigest() {
   const types = new Set(all.map((r) => r.service_type)).size;
   const up = latestSnap?.up === true;
   return (
-    "The pond right now: " + live + " inhabitant" + (live === 1 ? "" : "s") +
+    "Right now: " + live + " inhabitant" + (live === 1 ? "" : "s") +
     " across " + types + " type" + (types === 1 ? "" : "s") +
     " · daemon " + (up ? "up" : "down")
   );
@@ -844,7 +844,7 @@ function renderGlance() {
     glance["glance-detail"].textContent = attention.join(" · ");
     glance["glance-word"].closest(".strip")?.setAttribute("data-tone", "warn");
   } else if (feed.watched.size) {
-    glance["glance-word"].textContent = "Pond is living";
+    glance["glance-word"].textContent = "Active";
     glance["glance-detail"].textContent =
       "watching " + feed.watched.size + " subject(s)";
     glance["glance-word"].closest(".strip")?.removeAttribute("data-tone");
@@ -883,7 +883,7 @@ function renderGlance() {
   if (!feed.rows.length) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "Nothing has happened yet — happenings collect here as the pond lives.";
+    empty.textContent = "Nothing has happened yet — happenings collect here as things happen.";
     happenings.append(empty);
   }
 
@@ -1012,11 +1012,11 @@ function browserRow(r) {
 // half mDNS firewalls eat. A stale silent burst is judged inconclusive.
 function deafVerdict(burst) {
   if (!burst || burst.bursts_sent === 0) {
-    return { tone: "info", text: "No query burst has gone out yet — press Burst to ask the pond a question." };
+    return { tone: "info", text: "No query burst has gone out yet — press Burst to ask the network a question." };
   }
   const age = burst.last_burst_age_secs;
   if (burst.last_burst_answers > 0) {
-    return { tone: "ok", text: `Hearing the pond: the last burst (${age ?? "?"}s ago) heard ${burst.last_burst_answers} answer${burst.last_burst_answers === 1 ? "" : "s"}.` };
+    return { tone: "ok", text: `The last burst (${age ?? "?"}s ago) heard ${burst.last_burst_answers} answer${burst.last_burst_answers === 1 ? "" : "s"}.` };
   }
   if (age != null && age <= 120) {
     return { tone: "bad", text: `Deaf? The last burst (${age}s ago) heard nothing. Announcing without hearing usually means a firewall (mDNS udp 5353), not a quiet network.` };
@@ -1208,7 +1208,7 @@ async function runDiff() {
     return;
   }
   diff["diff-go"].disabled = true;
-  note.textContent = "Reading both ponds…";
+  note.textContent = "Reading both nodes…";
   results.textContent = "";
   try {
     const [a, b] = await Promise.allSettled([
@@ -1687,7 +1687,7 @@ async function refreshTrust() {
   if (!invoke) {
     trust["trust-role"].textContent = "Trust lives in the desktop workbench";
     trust["trust-detail"].textContent =
-      "The phone view can read the pond's public state; the ceremony and audit stay local.";
+      "The phone view can read the network's public state; the ceremony and audit stay local.";
     return;
   }
   let caps = null;
@@ -1873,7 +1873,7 @@ if (window.__TAURI__?.event?.listen) {
       heroDetail.textContent = attention[0];
       statusHero.dataset.tone = "warn";
     } else if (feed.rows.length || feed.watched.size) {
-      heroWord.textContent = "Pond is living";
+      heroWord.textContent = "Active";
       heroDetail.textContent = feed.watched.size
         ? "watching " + feed.watched.size + " subject(s); everything else flows past"
         : "events stream as they happen";
@@ -1922,7 +1922,7 @@ if (window.__TAURI__?.event?.listen) {
   // A loopback poke (127.0.0.1:5640/poke) means something local just changed
   // the daemon's world (Run once, install, a script) — re-read everything now.
   window.__TAURI__.event.listen("ui-poked", () => {
-    dlog("poked: re-reading the pond");
+    dlog("poked: re-reading the network");
     lastStatus = "";
     refreshStatus();
     seedSnapshot();
