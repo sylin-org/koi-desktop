@@ -322,6 +322,8 @@
             <p>Whether the Koi daemon is running on this machine, and what it is serving.</p>
           </div>
           <div>
+            <button class="ghost-button" type="button" id="btn-glass"
+              title="The capability ladder with the daemon's own skip reasons">Capability ladder</button>
             <button class="ghost-button" type="button" id="refresh-status">Refresh</button>
             <button class="ghost-button" type="button" id="btn-phone" title="Publish this interface and show a QR - opens the same pond on any screen on this network">Phone</button>
           </div>
@@ -366,6 +368,23 @@
           <div class="tile"><h3>Version</h3><p class="mono" id="t-version">&hellip;</p></div>
           <div class="tile"><h3>Data root</h3><p class="mono">%ProgramData%\koi</p></div>
         </div>
+      </div>
+    </section>
+
+    <!-- ── Honest glass (ADR-035 made visible) ────────────────────── -->
+    <section class="view" id="view-glass" data-page="glass" aria-label="Capability ladder">
+      <div style="padding: 26px 40px;">
+        <div class="page-heading">
+          <div>
+            <span class="kicker">ADR-035 made visible</span>
+            <h1>Capability ladder</h1>
+            <p>Every rung exactly as the daemon declared it — a skipped capability is a
+               designed state with a reason, never a silent absence.</p>
+          </div>
+          <button class="ghost-button" type="button" id="glass-refresh">Refresh</button>
+        </div>
+        <p class="action-note" id="glass-meta"></p>
+        <div class="queue" id="glass-ladder"></div>
       </div>
     </section>
 

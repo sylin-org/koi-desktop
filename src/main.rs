@@ -94,6 +94,7 @@ fn run() -> Result<()> {
                 certmesh_revoke,
                 open_url,
                 notify,
+                daemon_status_full,
                 status_events_start,
                 debug_log
             ])
@@ -408,6 +409,14 @@ fn daemon_status() -> Result<serde_json::Value, String> {
         }
     }
     Ok(out)
+}
+
+/// The whole /v1/status document — the honest glass pane shows the capability
+/// ladder with the daemon's own words (skip reasons are data, not log lines).
+#[tauri::command]
+fn daemon_status_full() -> Result<serde_json::Value, String> {
+    get_json(&daemon_agent(), format!("{DAEMON_ORIGIN}/v1/status"))
+        .ok_or_else(|| "no daemon — the ladder is unknown, not healthy".to_string())
 }
 
 #[tauri::command]

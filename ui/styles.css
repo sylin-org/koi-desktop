@@ -918,3 +918,10 @@ body.readonly #audit-refresh, body.readonly #invite-mint { display: none !import
 .row-star { justify-self: end; font-size: 13px; cursor: pointer; border: none;
   background: none; color: var(--dim, #8b8b94); padding: 0 2px; opacity: .6; }
 .row-star:hover, .row-star.pinned { opacity: 1; color: var(--a, #60a5fa); }
+
+/* ── Honest glass (cycle 1 WP9) ─────────────────────────────────────── */
+.row.glass-rung { grid-template-columns: 24px 120px minmax(0, 1fr) 90px; cursor: pointer; }
+.row.glass-rung.up { border-left-color: var(--ok, #4ade80); }
+.row.glass-rung.down { border-left-color: #f87171; }
+.row.glass-rung .med-mini { color: var(--ok, #4ade80); }
+.row.glass-rung.down .med-mini { color: #f87171; }

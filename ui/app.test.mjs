@@ -377,3 +377,31 @@ test("care: unwatched subjects never notify", async () => {
   probe(ctx, `notifiedFades.clear(); watchedFade("announcement:stranger", "stranger went away.");`);
   assert.equal(probe(ctx, "notifiedFades.size"), 0, "no star, no notification");
 });
+
+// ── WP9: the honest glass ────────────────────────────────────────────
+
+test("glass: rungs render the daemon's own words, degraded stays visible", async () => {
+  const { ctx, document } = await boot();
+  const rung = probe(ctx, `glassRow({
+    name: "mdns",
+    healthy: false,
+    summary: "skipped — UDP 5353 held by another mDNS stack (avahi), by design (ADR-030)",
+  })`);
+  assert.match(rung.className, /down/);
+  assert.match(rung.innerHTML, /skipped — UDP 5353 held by another mDNS stack/);
+  assert.match(rung.innerHTML, /degraded/);
+  const up = probe(ctx, `glassRow({ name: "ipc", healthy: true, summary: "named pipe mounted" })`);
+  assert.match(up.className, /up/);
+  assert.match(up.innerHTML, /healthy/);
+  assert.match(up.innerHTML, /named pipe mounted/);
+});
+
+test("glass: unavailable states are honest, never healthy-shaped", async () => {
+  const { ctx, document } = await boot();
+  // browser (phone) mode: the full ladder stays local — said plainly
+  await probe(ctx, `refreshGlass()`);
+  await new Promise((r) => setImmediate(r));
+  const empty = document.getElementById("glass-ladder").querySelector(".empty");
+  assert.ok(empty, "an honest empty state exists");
+  assert.match(empty.textContent, /stays in the desktop workbench/);
+});

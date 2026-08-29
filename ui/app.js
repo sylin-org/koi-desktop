@@ -1271,6 +1271,85 @@ function passageButton(r) {
   return btn;
 }
 
+// ── Honest glass (cycle-1 WP9): the ladder with reasons as data ──────
+// Every rung verbatim from /v1/status — the daemon's own summary IS the
+// reason. A skipped capability renders as the designed state it is.
+const glass = {};
+for (const id of ["glass-ladder", "glass-meta", "glass-refresh"]) {
+  glass[id] = document.getElementById(id);
+}
+let glassExpanded = null;
+
+// gotoView gains tab-less views (the glass is an overlay pane, not a tab).
+const origGotoView = gotoView;
+gotoView = function (view) {
+  const tab = document.querySelector('.tab[data-view="' + view + '"]');
+  if (tab) { origGotoView(view); return; }
+  for (const v of document.querySelectorAll(".view")) {
+    v.classList.toggle("active", v.dataset.page === view);
+  }
+  if (view === "glass") refreshGlass();
+};
+
+function glassRow(cap) {
+  const node = document.createElement("div");
+  node.className = "row glass-rung " + (cap.healthy ? "up" : "down");
+  node.innerHTML =
+    `<div class="med-mini ${cap.healthy ? "family" : ""}">${cap.healthy ? "●" : "○"}</div>` +
+    `<div class="row-tool">${escapeHtml(cap.name)}</div>` +
+    `<div class="row-activity">${escapeHtml(cap.summary)}</div>` +
+    `<div class="row-cap">${escapeHtml(cap.healthy ? "healthy" : "degraded")}</div>`;
+  node.addEventListener("click", () => {
+    glassExpanded = glassExpanded === cap.name ? null : cap.name;
+    refreshGlass();
+  });
+  if (glassExpanded === cap.name) {
+    const detail = document.createElement("div");
+    detail.className = "row-detail";
+    detail.textContent = `${cap.name}: ${cap.healthy ? "healthy" : "degraded"} — ${cap.summary}`;
+    node.append(detail);
+  }
+  return node;
+}
+
+async function refreshGlass() {
+  const host = glass["glass-ladder"];
+  if (!host) return;
+  if (!invoke) {
+    host.textContent = "";
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "The full ladder stays in the desktop workbench.";
+    host.append(empty);
+    return;
+  }
+  host.textContent = "";
+  let status;
+  try {
+    status = await invoke("daemon_status_full");
+  } catch (error) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = String(error);
+    host.append(empty);
+    glass["glass-meta"].textContent = "";
+    return;
+  }
+  const rungs = status?.capabilities ?? [];
+  glass["glass-meta"].textContent =
+    `${rungs.length} rungs · daemon up ${status?.uptime_secs ?? "?"}s · ` +
+    `version ${status?.version ?? "?"} · measured just now`;
+  for (const cap of rungs) host.append(glassRow(cap));
+  if (!rungs.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "The daemon declared no capabilities — that itself would be worth reading.";
+    host.append(empty);
+  }
+}
+glass["glass-refresh"]?.addEventListener("click", refreshGlass);
+document.getElementById("btn-glass")?.addEventListener("click", () => gotoView("glass"));
+
 // ── Trust pane (cycle-1 WP6): ceremony + audit ───────────────────────
 // Friction is the feature: the grant ceremony places BOTH fingerprints side
 // by side and the invite stays locked until the operator states they compared
@@ -1496,7 +1575,10 @@ if (window.__TAURI__?.event?.listen) {
     let svc = { installed: false, running: false };
     // SCM state is cheap and local; refresh alongside each push.
     invoke("service_status").then((s) => { svc = s ?? svc; }).catch(() => {})
-      .finally(() => applyStatus(event.payload ?? { up: false }, svc));
+      .finally(() => {
+      applyStatus(event.payload ?? { up: false }, svc);
+      if (document.getElementById("view-glass")?.classList.contains("active")) refreshGlass();
+    });
   });
   // ── Status streaming hero (cycle-1 WP1) ──
   // The feed is shared (At a glance recounts it); this pane renders the
