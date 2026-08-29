@@ -1396,11 +1396,16 @@ for (const id of ["trust-note", "trust-role", "trust-detail", "trust-members-cou
                   "ceremony", "grant-label", "grant-consequence", "fp-ca", "fp-invite",
                   "fp-compared", "invite-token", "invite-expires", "invite-note",
                   "audit-log", "audit-refresh", "trust-refresh",
-                  "trust-ceremony-form", "trust-ceremony-head"]) {
+                  "trust-ceremony-form", "trust-ceremony-head",
+                  "trust-actions", "form-create", "form-join", "form-unlock",
+                  "form-destroy", "create-profile", "create-pass", "create-pass2",
+                  "create-operator", "create-operator-row", "create-go",
+                  "join-endpoint", "join-invite", "join-totp", "join-go",
+                  "unlock-pass", "unlock-go", "destroy-confirm", "destroy-go"]) {
   trust[id] = document.getElementById(id);
 }
 let lastCertmeshStatus = null;
-let trustGate = { certmeshEnabled: false, activeCA: false, roster: [], reason: "" };
+let trustGate = { certmeshEnabled: false, activeCA: false, isMember: false, roster: [], reason: "" };
 
 // Derive the gate from declared state only: the ladder rung (capability),
 // the CA status (grantor + roster), and the diagnose (member vs open).
@@ -1408,14 +1413,15 @@ function trustGateOf(caps, status, diagnose) {
   const rung = (caps ?? []).find((c) => c.name === "certmesh");
   if (!rung || (rung.summary ?? "") === "disabled") {
     return {
-      certmeshEnabled: false, activeCA: false, roster: [],
+      certmeshEnabled: false, activeCA: false, isMember: false, roster: [],
       reason: rung?.summary || "absent from this daemon's capability ladder",
     };
   }
   const ca = status ?? {};
   const activeCA = ca.ca_initialized === true && ca.ca_locked === false;
-  void diagnose;
-  return { certmeshEnabled: true, activeCA, roster: ca.members ?? [], reason: rung.summary };
+  const identity = (diagnose?.checks ?? []).find((c) => c.name === "identity");
+  const isMember = !activeCA && !!identity && !/not_applicable/i.test(identity.status ?? "");
+  return { certmeshEnabled: true, activeCA, isMember, roster: ca.members ?? [], reason: rung.summary };
 }
 
 // Machine names compare by base label: roster hostnames are `.internal`,
@@ -1471,8 +1477,7 @@ function trustRoleOf(status, diagnose) {
   return {
     role: "open node",
     detail: "This machine holds no trust role yet — it has no CA and no identity. " +
-      "Create one with `koi certmesh create`, or join an existing CA with `koi certmesh join`. " +
-      "Until it is a CA, it grants nothing.",
+      "Create a CA here, or join an existing pond below. Until then it grants nothing.",
   };
 }
 
@@ -1559,10 +1564,69 @@ function renderTrustMembers(status, gate) {
   }
 }
 
+// One action strip, role-adaptive: each role gets exactly the actions it can
+// actually take, with the consequence stated before the state changes.
+function renderTrustActions(gate, status) {
+  const host = trust["trust-actions"];
+  if (!host) return;
+  host.textContent = "";
+  if (!gate.certmeshEnabled) return; // the honest card above is the whole story
+
+  const action = (label, cls, fn, title) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "ghost-button" + (cls ? " " + cls : "");
+    b.textContent = label;
+    if (title) b.title = title;
+    b.addEventListener("click", fn);
+    host.append(b);
+    return b;
+  };
+  const hideForms = () => {
+    for (const f of ["form-create", "form-join", "form-unlock", "form-destroy"]) {
+      trust[f].hidden = true;
+    }
+  };
+  const toggleForm = (form) => {
+    const wasOpen = !trust[form].hidden;
+    hideForms();
+    trust[form].hidden = wasOpen;
+  };
+
+  const caActive = gate.activeCA;
+  const caExists = status?.ca_initialized === true;
+
+  if (!caExists && !gate.isMember) {
+    action("Create a CA here…", "", () => toggleForm("form-create"),
+      "This machine becomes the pond's grantor");
+    action("Join a pond…", "", () => toggleForm("form-join"),
+      "Enroll this machine under an existing CA");
+  }
+  if (caExists && !caActive) {
+    action("Unlock…", "", () => toggleForm("form-unlock"),
+      "Unlock minting and revocation on this daemon");
+  }
+  if (gate.isMember || caExists) {
+    action("Renew identity", "", renewSelf,
+      "Rotate this machine's key and pull a fresh leaf before expiry");
+  }
+  if (caActive) {
+    const open = status?.enrollment_open === true;
+    action(open ? "Close enrollment" : "Open enrollment", "", () => enrollmentToggle(open),
+      open ? "Invites keep working either way" : "Only invites (no mesh TOTP) can enroll");
+    action("Destroy this CA…", "danger-button", () => toggleForm("form-destroy"),
+      "Erases the CA, its certificates, and its audit log on this machine");
+  }
+}
+
 function renderTrust(gate, status, diagnose) {
   trustGate = gate;
   lastCertmeshStatus = status;
-  const role = trustRoleOf(status, diagnose);
+  const role = !gate.certmeshEnabled
+    ? { role: "certmesh disabled on this daemon",
+        detail: "The capability ladder reports: " + gate.reason +
+          ". No pond membership exists here — nothing to grant, nothing to join." }
+    : trustRoleOf(status, diagnose);
   trust["trust-role"].textContent = role.role;
   trust["trust-detail"].textContent = role.detail;
   // The ceremony is a grantor's instrument; hide it wherever minting is
@@ -1572,10 +1636,51 @@ function renderTrust(gate, status, diagnose) {
   trust["trust-ceremony-head"].hidden = !canGrant;
   trust["ceremony"].hidden = trust["ceremony"].hidden || !canGrant;
   renderTrustMembers(status, gate);
+  renderTrustActions(gate, status);
   if (!gate.certmeshEnabled) {
     trust["audit-log"].textContent =
       "certmesh is disabled on this daemon (" + gate.reason + ") — no audit trail exists here.";
   }
+}
+
+async function trustAct(fn, note) {
+  trustNote(note ? note + "…" : "Working…");
+  try {
+    const out = await fn();
+    refreshTrust();
+    return out;
+  } catch (error) {
+    trustNote(String(error), true);
+    return undefined;
+  }
+}
+
+async function renewSelf() {
+  const out = await trustAct(() => invoke("certmesh_renew_self"), "Renewing this machine's identity");
+  if (out) trustNote("Identity renewed — the leaf is fresh; the key rotated.");
+}
+
+async function enrollmentToggle(open) {
+  const cmd = open ? "certmesh_close_enrollment" : "certmesh_open_enrollment";
+  const out = await trustAct(() => invoke(cmd),
+    open ? "Closing enrollment" : "Opening enrollment");
+  if (out) {
+    trustNote(open
+      ? "Enrollment closed — only invites can enroll now."
+      : "Enrollment open — a holder of the mesh TOTP can join; invites keep working.");
+  }
+}
+
+async function caDestroy() {
+  if (trust["destroy-confirm"].value.trim() !== "DESTROY") {
+    trustNote("Type DESTROY to confirm — this erases the CA, its certificates, and its audit log.", true);
+    return;
+  }
+  const out = await trustAct(() => invoke("certmesh_destroy"), "Destroying the CA");
+  trust["destroy-confirm"].value = "";
+  if (out) trustNote(out?.destroyed === false
+    ? "The CA could not be destroyed."
+    : "CA destroyed. All CA data, certificates, and audit logs have been removed from this machine.");
 }
 
 async function refreshTrust() {
@@ -1663,6 +1768,54 @@ async function refreshAudit() {
   }
 }
 trust["audit-refresh"]?.addEventListener("click", refreshAudit);
+
+// ── CA + membership actions (role-adaptive) ──────────────────────────
+
+trust["create-profile"]?.addEventListener("change", (e) => {
+  // approval profiles sign members in the operator's name
+  const needsOperator = e.target.value !== "just-me";
+  trust["create-operator-row"].style.display = needsOperator ? "" : "none";
+});
+
+trust["create-go"]?.addEventListener("click", async () => {
+  const profile = trust["create-profile"].value;
+  const pass = trust["create-pass"].value;
+  const confirm = trust["create-pass2"].value;
+  const operator = trust["create-operator"].value;
+  trust["create-pass"].value = "";
+  trust["create-pass2"].value = "";
+  const out = await trustAct(
+    () => invoke("certmesh_create", { profile, passphrase: pass, confirm, operator }),
+    "Creating the CA (key generation takes a moment)");
+  if (out) {
+    trustNote("CA created — this machine is the pond's grantor. Fingerprint: " +
+      (out?.ca_fingerprint ?? "unknown") + ". Keep the passphrase; there is no recovery.");
+  }
+});
+
+trust["join-go"]?.addEventListener("click", async () => {
+  const endpoint = trust["join-endpoint"].value;
+  const invite = trust["join-invite"].value;
+  const totp = trust["join-totp"].value;
+  trust["join-invite"].value = "";
+  trust["join-totp"].value = "";
+  const out = await trustAct(
+    () => invoke("certmesh_join", { endpoint, invite: invite || null, totp: totp || null }),
+    "Joining (preflight, key generation, signature, install)");
+  if (out) {
+    trustNote("Enrolled as " + (out?.hostname ?? "this machine") + " under " +
+      (out?.ca_endpoint ?? "the CA") + ".");
+  }
+});
+
+trust["unlock-go"]?.addEventListener("click", async () => {
+  const passphrase = trust["unlock-pass"].value;
+  trust["unlock-pass"].value = "";
+  const out = await trustAct(() => invoke("certmesh_unlock", { passphrase }), "Unlocking");
+  if (out) trustNote("CA unlocked — minting and revocation are live until the daemon stops.");
+});
+
+trust["destroy-go"]?.addEventListener("click", caDestroy);
 
 // Stranger flow (E6, gated): the ONLY stranger an invite can reach is a
 // machine that already runs Koi (it announces koi-family), isn't in the

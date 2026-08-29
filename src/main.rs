@@ -92,6 +92,13 @@ fn run() -> Result<()> {
                 certmesh_log,
                 certmesh_invite,
                 certmesh_revoke,
+                certmesh_create,
+                certmesh_unlock,
+                certmesh_destroy,
+                certmesh_open_enrollment,
+                certmesh_close_enrollment,
+                certmesh_renew_self,
+                certmesh_join,
                 open_url,
                 notify,
                 daemon_status_full,
@@ -482,6 +489,335 @@ fn daemon_json(
         return Ok(serde_json::json!({ "ok": true }));
     }
     serde_json::from_str(&text).map_err(|e| format!("{path} malformed: {e}"))
+}
+
+// ── CA + membership management (cycle-1, operator direction) ────────
+// The Trust pane is role-adaptive: an open node can CREATE a CA or JOIN a
+// pond; a locked CA can UNLOCK; an active CA manages enrollment, renews, and
+// can DESTROY itself; a member renews its identity. Every request rides the
+// local breadcrumb DAT exactly like the CLI; the remote join call carries no
+// local token (the CA never sees ours). Passphrases cross loopback only and
+// are never logged.
+
+/// Profile presets (koi-certmesh/src/profiles.rs): (enrollment_open,
+/// requires_approval, auto_unlock). The UI names them; the daemon owns them.
+fn preset_bools(profile: &str) -> Option<(bool, bool, bool)> {
+    match profile {
+        "just-me" => Some((true, false, true)),
+        "team" => Some((true, true, true)),
+        "organization" => Some((false, true, false)),
+        _ => None,
+    }
+}
+
+/// 32 bytes of mixing entropy for CA creation (the daemon requires exactly 32
+/// bytes of hex). The CA key generator has its own OS RNG; this is additional
+/// mixing material. Without a new dependency, mix several OS-seeded
+/// `RandomState` keys (std seeds each from OS entropy) with time and address
+/// dispersion — unpredictable, honest about not being a documented CSPRNG.
+fn mixing_entropy() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hash, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut words = [0u64; 4];
+    for (i, word) in words.iter_mut().enumerate() {
+        let mut h = RandomState::new().build_hasher();
+        i.hash(&mut h);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        nanos.hash(&mut h);
+        let stack_marker = 0u8;
+        (&stack_marker as *const u8).hash(&mut h);
+        *word = h.finish();
+    }
+    let mut hex = String::with_capacity(64);
+    for w in words {
+        hex.push_str(&format!("{w:016x}"));
+    }
+    hex
+}
+
+/// Normalize a CA endpoint: accept `host:port` or a full URL, default http.
+fn normalize_ca_endpoint(endpoint: &str) -> Result<String, String> {
+    let e = endpoint.trim().trim_end_matches('/');
+    if e.is_empty() {
+        return Err("the CA endpoint is required".into());
+    }
+    if let Some(rest) = e.strip_prefix("http://") {
+        if rest.is_empty() || rest.contains('/') || rest.contains(' ') {
+            return Err("the CA endpoint looks wrong".into());
+        }
+        return Ok(format!("http://{rest}"));
+    }
+    if let Some(rest) = e.strip_prefix("https://") {
+        if rest.is_empty() || rest.contains('/') || rest.contains(' ') {
+            return Err("the CA endpoint looks wrong".into());
+        }
+        return Ok(format!("https://{rest}"));
+    }
+    if e.contains('/') || e.contains(' ') || e.contains('\\') {
+        return Err("the CA endpoint looks wrong".into());
+    }
+    Ok(format!("http://{e}"))
+}
+
+/// Split an invite code `<secret>.<ca_fingerprint>` (ADR-017 F3): the CA only
+/// ever receives the secret half; the fingerprint half is the joiner's pin.
+fn split_invite(invite: &str) -> (String, Option<String>) {
+    match invite.split_once('.') {
+        Some((secret, fp)) if !fp.is_empty() => (secret.to_string(), Some(fp.to_string())),
+        _ => (invite.trim().to_string(), None),
+    }
+}
+
+fn hex_fingerprint(fp: &str) -> String {
+    fp.trim().to_lowercase().replace(':', "")
+}
+
+/// POST to a REMOTE daemon without the local token: the CA never sees ours.
+fn remote_post(
+    agent: &ureq::Agent,
+    endpoint: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let response = agent
+        .post(format!("{endpoint}{path}").as_str())
+        .send_json(body)
+        .map_err(|e| match e {
+            ureq::Error::Status(code, resp) => {
+                let reason = resp.into_string().unwrap_or_default();
+                format!("{code}: {}", reason.chars().take(300).collect::<String>())
+            }
+            other => format!("{other}"),
+        })?;
+    let text = response
+        .into_string()
+        .map_err(|e| format!("{path} unreadable: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("{path} malformed: {e}"))
+}
+
+fn remote_get(
+    agent: &ureq::Agent,
+    endpoint: &str,
+    path: &str,
+) -> Result<serde_json::Value, String> {
+    let response = agent
+        .get(format!("{endpoint}{path}").as_str())
+        .call()
+        .map_err(|e| format!("{path}: {e}"))?;
+    let text = response
+        .into_string()
+        .map_err(|e| format!("{path} unreadable: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("{path} malformed: {e}"))
+}
+
+#[tauri::command]
+fn certmesh_create(
+    profile: String,
+    passphrase: String,
+    confirm: String,
+    operator: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if passphrase.len() < 8 {
+        return Err("the CA passphrase needs at least 8 characters — it protects every identity this CA signs.".into());
+    }
+    if passphrase != confirm {
+        return Err("the passphrases do not match.".into());
+    }
+    let (enrollment_open, requires_approval, auto_unlock) =
+        preset_bools(&profile).ok_or_else(|| "unknown CA profile".to_string())?;
+    let op = operator
+        .map(|o| o.trim().to_string())
+        .filter(|o| !o.is_empty());
+    if requires_approval && (op.is_none() || op.as_deref() == Some("")) {
+        return Err("approval profiles name the operator who approves members.".into());
+    }
+    daemon_json(
+        "POST",
+        "/v1/certmesh/create",
+        Some(serde_json::json!({
+            "passphrase": passphrase,
+            "entropy_hex": mixing_entropy(),
+            "operator": op,
+            "enrollment_open": enrollment_open,
+            "requires_approval": requires_approval,
+            "auto_unlock": auto_unlock,
+        })),
+    )
+}
+
+#[tauri::command]
+fn certmesh_unlock(passphrase: String) -> Result<serde_json::Value, String> {
+    if passphrase.is_empty() {
+        return Err("the CA passphrase is required.".into());
+    }
+    daemon_json(
+        "POST",
+        "/v1/certmesh/unlock",
+        Some(serde_json::json!({ "passphrase": passphrase })),
+    )
+}
+
+#[tauri::command]
+fn certmesh_destroy() -> Result<serde_json::Value, String> {
+    daemon_json("POST", "/v1/certmesh/destroy", Some(serde_json::json!({})))
+}
+
+#[tauri::command]
+fn certmesh_open_enrollment() -> Result<serde_json::Value, String> {
+    daemon_json(
+        "POST",
+        "/v1/certmesh/open-enrollment",
+        Some(serde_json::json!({})),
+    )
+}
+
+#[tauri::command]
+fn certmesh_close_enrollment() -> Result<serde_json::Value, String> {
+    daemon_json(
+        "POST",
+        "/v1/certmesh/close-enrollment",
+        Some(serde_json::json!({})),
+    )
+}
+
+#[tauri::command]
+fn certmesh_renew_self() -> Result<serde_json::Value, String> {
+    daemon_json(
+        "POST",
+        "/v1/certmesh/renew-self",
+        Some(serde_json::json!({})),
+    )
+}
+
+/// Join a pond (the membership ceremony, orchestrated): preflight the CA and
+/// pin its fingerprint to the invite's, generate the keypair + CSR LOCALLY
+/// (key custody never leaves this machine), send the CSR to the REMOTE CA
+/// with the invite secret (or a mesh TOTP), and install the signed cert
+/// locally with the pinned fingerprint. Mirrors `koi certmesh join`.
+#[tauri::command]
+fn certmesh_join(
+    endpoint: String,
+    invite: Option<String>,
+    totp: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let ca = normalize_ca_endpoint(&endpoint)?;
+    let invite = invite
+        .map(|i| i.trim().to_string())
+        .filter(|i| !i.is_empty());
+    let totp = totp.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    if invite.is_none() && totp.is_none() {
+        return Err("bring either an invite code or a mesh TOTP code.".into());
+    }
+    if invite.is_some() && totp.is_some() {
+        return Err("use an invite OR a TOTP code — not both.".into());
+    }
+    let (invite_secret, pinned_fp) = match &invite {
+        Some(code) => {
+            let (secret, fp) = split_invite(code);
+            (Some(secret), fp)
+        }
+        None => (None, None),
+    };
+
+    let agent = daemon_agent();
+
+    // 1. Preflight + pin: refuse a CA whose self-reported fingerprint does not
+    //    match the invite's pin BEFORE any CSR leaves this machine.
+    let ca_status = remote_get(&agent, &ca, "/v1/certmesh/status")?;
+    let advertised = ca_status
+        .get("ca_fingerprint")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let pinned = match (&pinned_fp, &advertised) {
+        (Some(pin), Some(ad)) => {
+            if hex_fingerprint(pin) != hex_fingerprint(ad) {
+                return Err(format!(
+                    "CA fingerprint mismatch — refusing to join. invite pinned {pin}, CA advertised {ad}. \
+                     The endpoint may be impersonating the CA, or the invite is for a different mesh."
+                ));
+            }
+            Some(hex_fingerprint(pin))
+        }
+        (Some(pin), None) => {
+            return Err(format!(
+                "the CA at {ca} did not report a fingerprint — aborting (the invite expects {pin})"
+            ));
+        }
+        // TOTP join has no out-of-band pin: TOFU on the CA's self-reported fp.
+        (None, ad) => ad.as_deref().map(hex_fingerprint),
+    };
+
+    // 2. Local key custody: the daemon generates the keypair + CSR; the private
+    //    key is written on this machine and never leaves it.
+    let local_hostname = hostname();
+    let csr_resp = daemon_json(
+        "POST",
+        "/v1/certmesh/member-csr",
+        Some(serde_json::json!({ "hostname": local_hostname, "sans": [] })),
+    )?;
+    let csr = csr_resp
+        .get("csr")
+        .and_then(|v| v.as_str())
+        .ok_or("the local daemon did not return a CSR")?
+        .to_string();
+
+    // 3. The remote CA signs it. Invite secret OR mesh TOTP — never both.
+    let mut join_body = serde_json::Map::new();
+    join_body.insert("hostname".into(), serde_json::json!(local_hostname));
+    join_body.insert("csr".into(), serde_json::json!(csr));
+    if let Some(secret) = &invite_secret {
+        join_body.insert("invite_token".into(), serde_json::json!(secret));
+    } else {
+        join_body.insert(
+            "auth".into(),
+            serde_json::json!({ "method": "totp", "code": totp.clone().unwrap_or_default() }),
+        );
+    }
+    let joined = remote_post(
+        &agent,
+        &ca,
+        "/v1/certmesh/join",
+        serde_json::Value::Object(join_body),
+    )?;
+    let service_cert = joined
+        .get("service_cert")
+        .and_then(|v| v.as_str())
+        .ok_or("the CA response is missing the signed certificate")?;
+    let ca_cert = joined
+        .get("ca_cert")
+        .and_then(|v| v.as_str())
+        .ok_or("the CA response is missing the CA certificate")?;
+
+    // 4. Install locally, pinned to the out-of-band invite fingerprint when we
+    //    have one (never to the response fingerprint on an invite join).
+    let mut install = serde_json::Map::new();
+    install.insert("hostname".into(), serde_json::json!(local_hostname));
+    install.insert("cert_pem".into(), serde_json::json!(service_cert));
+    install.insert("ca_pem".into(), serde_json::json!(ca_cert));
+    install.insert("ca_endpoint".into(), serde_json::json!(ca));
+    if let Some(fp) = &pinned {
+        install.insert("ca_fingerprint".into(), serde_json::json!(fp));
+    }
+    install.insert("sans".into(), serde_json::json!([]));
+    if let Some(policy) = joined.get("policy") {
+        install.insert("policy".into(), policy.clone());
+    }
+    let installed = daemon_json(
+        "POST",
+        "/v1/certmesh/member-cert",
+        Some(serde_json::Value::Object(install)),
+    )?;
+
+    Ok(serde_json::json!({
+        "enrolled": true,
+        "hostname": local_hostname,
+        "ca_endpoint": ca,
+        "ca_fingerprint": installed.get("ca_fingerprint").or(joined.get("ca_fingerprint")),
+    }))
 }
 
 /// Care (cycle-1 WP8): one OS notification when a watched inhabitant fades.

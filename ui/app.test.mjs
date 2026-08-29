@@ -455,3 +455,90 @@ test("rows: action buttons land in one .row-actions cell, never as stray childre
     "non-family announcements are never invite candidates");
   assert.ok(cell.querySelector(".row-star"), "star present");
 });
+
+// ── CA + membership management: the role-adaptive action strip ───────
+
+const CA_STATUS = {
+  ca_initialized: true, ca_locked: false, enrollment_open: false,
+  members: [{ hostname: "forge.internal", role: "member", status: "active",
+              cert_fingerprint: "aa", cert_expires: "2026-09-04T00:00:00Z" }],
+};
+const MEMBER_DIAG = { checks: [{ name: "identity", status: "ok", detail: "signed" }] };
+const OPEN_DIAG = { checks: [{ name: "identity", status: "not_applicable", detail: "Open node" }] };
+const ENABLED = { certmeshEnabled: true, activeCA: true, isMember: false, roster: [], reason: "" };
+
+function actionLabels(document) {
+  return [...document.getElementById("trust-actions").children].map((b) => b.textContent);
+}
+
+test("ca-mgmt: each role sees exactly the actions it can take", async ({ }) => {}, { skip: true });
+
+test("ca-mgmt: an open node can create a CA or join a pond — nothing else", async () => {
+  const { ctx, document } = await boot();
+  probe(ctx, `renderTrust(
+    { certmeshEnabled: true, activeCA: false, isMember: false, roster: [], reason: "ready" },
+    { ca_initialized: false, members: [] }, ${JSON.stringify(OPEN_DIAG)})`);
+  const labels = actionLabels(document);
+  assert.deepEqual(labels, ["Create a CA here…", "Join a pond…"]);
+  // no ceremony, no revoke anywhere: this machine grants nothing
+  assert.equal(document.getElementById("trust-ceremony-form").hidden, true);
+});
+
+test("ca-mgmt: an active CA manages enrollment, renewal, and destruction", async () => {
+  const { ctx, document } = await boot();
+  probe(ctx, `renderTrust(${JSON.stringify(ENABLED)}, ${JSON.stringify(CA_STATUS)}, null)`);
+  const labels = actionLabels(document);
+  assert.ok(labels.includes("Open enrollment"), "the toggle offers the state change (closed → open)");
+  assert.ok(labels.includes("Renew identity"));
+  assert.ok(labels.includes("Destroy this CA…"));
+  assert.ok(!labels.includes("Create a CA here…"), "the CA exists; no create");
+  assert.ok(!labels.includes("Join a pond…"), "the CA is not a join candidate");
+  // ceremony + roster + revoke live for the grantor
+  assert.equal(document.getElementById("trust-ceremony-form").hidden, false);
+  const memberRows = [...document.getElementById("trust-members").children]
+    .filter((n) => n.className.startsWith("row trust-member"));
+  assert.ok(memberRows[0]?.querySelector(".row-remove"), "revoke offered to the grantor");
+});
+
+test("ca-mgmt: a locked CA can only unlock (read-only roster) until unlocked", async () => {
+  const { ctx, document } = await boot();
+  probe(ctx, `renderTrust(
+    { certmeshEnabled: true, activeCA: false, isMember: false, roster: [], reason: "" },
+    { ca_initialized: true, ca_locked: true, enrollment_open: false,
+      members: [{ hostname: "forge.internal", role: "member", status: "active",
+                  cert_fingerprint: "aa", cert_expires: "2026-09-04T00:00:00Z" }] },
+    null)`);
+  assert.deepEqual(actionLabels(document), ["Unlock…", "Renew identity"]);
+  assert.equal(document.getElementById("trust-ceremony-form").hidden, true);
+  assert.equal(document.querySelector("#trust-members .row-remove"), null,
+    "locked CA revokes nothing");
+});
+
+test("ca-mgmt: a member renews its identity — grants live elsewhere", async () => {
+  const { ctx, document } = await boot();
+  probe(ctx, `renderTrust(
+    { certmeshEnabled: true, activeCA: false, isMember: true, roster: [], reason: "" },
+    { ca_initialized: false, members: [] }, ${JSON.stringify(MEMBER_DIAG)})`);
+  assert.deepEqual(actionLabels(document), ["Renew identity"]);
+  assert.match(document.getElementById("trust-role").textContent, /member of a pond/);
+  assert.equal(document.getElementById("trust-ceremony-form").hidden, true);
+});
+
+test("ca-mgmt: disabled certmesh renders no actions at all", async () => {
+  const { ctx, document } = await boot();
+  probe(ctx, `renderTrust(
+    { certmeshEnabled: false, activeCA: false, isMember: false, roster: [], reason: "disabled" },
+    { ca_initialized: false, members: [] }, ${JSON.stringify(OPEN_DIAG)})`);
+  assert.deepEqual(actionLabels(document), []);
+  assert.match(document.getElementById("trust-detail").textContent, /disabled/i);
+});
+
+test("ca-mgmt: the gate derives membership from the diagnose identity check", async () => {
+  const { ctx } = await boot();
+  const g = (status, diagnose) =>
+    probe(ctx, `trustGateOf([{ name: "certmesh", healthy: true, summary: "active" }], ${JSON.stringify(status)}, ${JSON.stringify(diagnose)})`);
+  assert.equal(g({ ca_initialized: false }, MEMBER_DIAG).isMember, true);
+  assert.equal(g({ ca_initialized: false }, OPEN_DIAG).isMember, false);
+  const ca = g({ ca_initialized: true, ca_locked: false }, MEMBER_DIAG);
+  assert.equal(ca.isMember, false, "an active CA is not a member");
+});

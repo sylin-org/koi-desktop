@@ -86,6 +86,85 @@
           </div>
         </article>
 
+        <div id="trust-actions" class="trust-actions"></div>
+
+        <article class="strip trust-form" id="form-create" hidden>
+          <div>
+            <h2>Create a CA on this machine</h2>
+            <p id="create-consequence" class="action-note">This machine becomes the pond's grantor.
+              The passphrase locks the CA — there is no recovery without it.</p>
+          </div>
+          <div class="form-grid four">
+            <label class="field"><span class="kicker">Profile</span>
+              <select id="create-profile" class="filter-select wide">
+                <option value="just-me">Just me — open enrollment, auto-unlock</option>
+                <option value="team">My team — open + approval</option>
+                <option value="organization">Organization — invites only, approval</option>
+              </select>
+            </label>
+            <label class="field"><span class="kicker">CA passphrase</span>
+              <input id="create-pass" type="password" class="filter-input wide" autocomplete="new-password" />
+            </label>
+            <label class="field"><span class="kicker">Repeat passphrase</span>
+              <input id="create-pass2" type="password" class="filter-input wide" autocomplete="new-password" />
+            </label>
+            <label class="field" id="create-operator-row"><span class="kicker">Operator (approvals name you)</span>
+              <input id="create-operator" class="filter-input wide" placeholder="your name" autocomplete="off" />
+            </label>
+            <button class="ghost-button" type="button" id="create-go">Create CA</button>
+          </div>
+        </article>
+
+        <article class="strip trust-form" id="form-join" hidden>
+          <div>
+            <h2>Join a pond</h2>
+            <p class="action-note">Joining gives this machine an identity signed by that CA.
+              The key never leaves this machine; the CA's operator can revoke it. Bring the invite
+              the CA's operator minted — or, with open enrollment, the mesh TOTP code.</p>
+          </div>
+          <div class="form-grid four">
+            <label class="field"><span class="kicker">CA endpoint</span>
+              <input id="join-endpoint" class="filter-input wide" placeholder="http://192.168.1.44:5641" autocomplete="off" spellcheck="false" />
+            </label>
+            <label class="field"><span class="kicker">Invite code</span>
+              <input id="join-invite" class="filter-input wide" placeholder="secret.fingerprint" autocomplete="off" spellcheck="false" />
+            </label>
+            <label class="field"><span class="kicker">— or mesh TOTP</span>
+              <input id="join-totp" class="filter-input wide" placeholder="6-digit code" autocomplete="off" />
+            </label>
+            <button class="ghost-button" type="button" id="join-go">Join</button>
+          </div>
+        </article>
+
+        <article class="strip trust-form" id="form-unlock" hidden>
+          <div>
+            <h2>Unlock the CA</h2>
+            <p class="action-note">Unlocks minting and revocation on this daemon until it stops.
+              The passphrase never leaves this machine.</p>
+          </div>
+          <div class="form-grid four">
+            <label class="field"><span class="kicker">CA passphrase</span>
+              <input id="unlock-pass" type="password" class="filter-input wide" autocomplete="current-password" />
+            </label>
+            <button class="ghost-button" type="button" id="unlock-go">Unlock</button>
+          </div>
+        </article>
+
+        <article class="strip trust-form" id="form-destroy" hidden>
+          <div>
+            <h2>Destroy this CA</h2>
+            <p class="action-note" id="destroy-consequence">Erases ALL CA data, certificates, and the
+              audit log on this machine. Members keep their certs until expiry, but the pond's trust
+              is gone. This cannot be undone.</p>
+          </div>
+          <div class="form-grid four">
+            <label class="field"><span class="kicker">Type DESTROY to confirm</span>
+              <input id="destroy-confirm" class="filter-input wide" autocomplete="off" spellcheck="false" />
+            </label>
+            <button class="danger-button" type="button" id="destroy-go">Destroy the CA</button>
+          </div>
+        </article>
+
         <div class="queue-head"><span>Members of this CA</span></div>
         <div class="queue" id="trust-members"></div>
 

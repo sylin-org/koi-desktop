@@ -924,3 +924,10 @@ body.readonly #audit-refresh, body.readonly #invite-mint { display: none !import
 .row.glass-rung.down { border-left-color: #f87171; }
 .row.glass-rung .med-mini { color: var(--ok, #4ade80); }
 .row.glass-rung.down .med-mini { color: #f87171; }
+
+/* ── CA + membership management (cycle 1) ───────────────────────────── */
+.trust-actions { display: flex; flex-wrap: wrap; gap: 9px; margin: 12px 2px 4px; }
+.trust-form[hidden] { display: none; }
+body.readonly .trust-actions, body.readonly #form-create,
+body.readonly #form-join, body.readonly #form-unlock,
+body.readonly #form-destroy { display: none !important; }
