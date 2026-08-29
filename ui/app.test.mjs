@@ -405,3 +405,28 @@ test("glass: unavailable states are honest, never healthy-shaped", async () => {
   assert.ok(empty, "an honest empty state exists");
   assert.match(empty.textContent, /stays in the desktop workbench/);
 });
+
+// ── regression: row action buttons live in the .row-actions grid cell ──
+// They used to be appended as bare extra children of the 6-column row grid,
+// wrapping onto an implicit second row as clipped fragments at the left edge.
+
+test("rows: action buttons land in one .row-actions cell, never as stray children", async () => {
+  const { ctx, document } = await boot();
+  seedRaw(ctx);
+  probe(ctx, "renderBrowser()");
+  const rows = [...document.getElementById("browser-queue").children]
+    .filter((n) => n.className.startsWith("row browser"));
+  for (const row of rows) {
+    const strays = row.children.filter((c) => c.className.includes("row-open")
+      || c.className.includes("row-star") || c.className.includes("trust-stranger"));
+    assert.equal(strays.length, 0, "no button sits directly on the row grid");
+    const cell = row.querySelector(".row-actions");
+    assert.ok(cell, "an actions cell exists");
+    assert.ok(cell.querySelector(".row-star"), "the star is inside the actions cell");
+  }
+  // a resolved non-family row carries open + star + trust in that one cell
+  const printer = rows.find((r) => r.innerHTML.includes("Brother HL-L2350"));
+  const cell = printer.querySelector(".row-actions");
+  assert.ok(cell.querySelector(".row-open"), "resolved row has passage");
+  assert.ok(cell.querySelector(".trust-stranger"), "non-family row has the stranger flow");
+});

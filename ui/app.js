@@ -400,8 +400,11 @@ function buildRow(r) {
   const node = document.createElement("div");
   node.className = rowClass(r) + " landing";
   node.innerHTML = rowMarkup(r);
-  if (r.resolved && r.port) node.append(passageButton(r));
-  node.append(starButton(r));
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+  node.append(actions);
+  if (r.resolved && r.port) actions.append(passageButton(r));
+  actions.append(starButton(r));
   node.addEventListener("animationend", () => node.classList.remove("landing"), { once: true });
   return node;
 }
@@ -962,8 +965,11 @@ function browserRow(r) {
     browserExpandedKey = browserExpandedKey === k ? null : k;
     renderBrowser();
   });
-  if (r.resolved && r.port) node.append(passageButton(r));
-  node.append(starButton(r));
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+  node.append(actions);
+  if (r.resolved && r.port) actions.append(passageButton(r));
+  actions.append(starButton(r));
   if (!isFamily(r)) {
     const invite = document.createElement("button");
     invite.className = "row-remove trust-stranger";
@@ -974,7 +980,7 @@ function browserRow(r) {
       e.stopPropagation();
       trustStranger(r.instance_name || r.name || r.service_type);
     });
-    node.append(invite);
+    actions.append(invite);
   }
   if (browserExpandedKey === k) node.append(browserDetail(r));
   return node;

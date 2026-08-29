@@ -754,16 +754,12 @@ kbd { padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; col
 .about-facts dd.down { color: var(--muted); }
 
 /* ── Discover pane deltas ── */
-.row.discover { grid-template-columns: 24px 150px minmax(0, 1fr) minmax(0, 1fr) 90px 90px; }
+/* The trailing auto column holds the .row-actions cell (passage + star). */
+.row.discover { grid-template-columns: 24px 150px minmax(0, 1fr) minmax(0, 1fr) 90px 90px auto; }
 @media (max-width: 820px) {
-  .row.discover { grid-template-columns: 24px 120px minmax(0, 1fr) 90px; }
+  .row.discover { grid-template-columns: 24px 120px minmax(0, 1fr) 90px auto; }
 }
-
-/* ── Discover: inhabitants, presence, groups ── */
-.row.discover { grid-template-columns: 24px 150px minmax(0, 1fr) minmax(0, 1fr) 90px 90px; }
-@media (max-width: 820px) {
-  .row.discover { grid-template-columns: 24px 120px minmax(0, 1fr) 90px; }
-}
+.row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .med-mini { color: var(--faint); }
 .med-mini.family { color: var(--a); }
 .row.live .row-cap { color: var(--ok); }
@@ -872,7 +868,10 @@ body.readonly .readonly-badge { display: inline-block; padding: 2px 10px;
 }
 
 /* ── Browser (cycle 1 WP3): the raw lens ────────────────────────────── */
-.row.browser { grid-template-columns: 24px 150px minmax(0, 1fr) minmax(0, 1fr) 90px 90px; cursor: pointer; }
+.row.browser { grid-template-columns: 24px 150px minmax(0, 1fr) minmax(0, 1fr) 90px 90px auto; cursor: pointer; }
+@media (max-width: 820px) {
+  .row.browser { grid-template-columns: 24px 120px minmax(0, 1fr) 90px auto; }
+}
 .row.browser.removed { opacity: 0.5; }
 .row.browser .med-mini:not(.family) { opacity: 0.35; }
 .row-detail {
@@ -902,7 +901,7 @@ body.readonly .readonly-badge { display: inline-block; padding: 2px 10px;
   border-radius: 8px; background: rgba(96, 165, 250, 0.03); color: var(--muted);
   font: 400 11px/1.7 var(--mono); overflow-wrap: anywhere; white-space: pre-wrap;
   max-height: 320px; overflow-y: auto; }
-.row.trust-member { grid-template-columns: 24px 180px minmax(0, 1fr) 110px 90px 90px; }
+.row.trust-member { grid-template-columns: 24px 180px minmax(0, 1fr) 110px 90px 90px auto; }
 body.readonly .trust-form, body.readonly .trust-stranger,
 body.readonly #audit-refresh, body.readonly #invite-mint { display: none !important; }
 
