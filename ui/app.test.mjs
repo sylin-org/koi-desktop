@@ -323,7 +323,7 @@ test("trust: the pane names the machine's honest role", async () => {
   // member: no local CA, identity HELD — grants happen where the CA lives
   const member = role({ ca_initialized: false },
     { checks: [{ name: "identity", status: "ok", detail: "signed" }] });
-  assert.match(member.role, /member of a pond/);
+  assert.match(member.role, /member of a mesh/);
   assert.match(member.detail, /grants happen there/);
   // locked CA
   assert.match(role({ ca_initialized: true, ca_locked: true }).role, /locked/);
@@ -387,9 +387,9 @@ test("invite affordance: only koi-family, unrostered machines, offered by the ac
   probe(ctx, `trustGate = { certmeshEnabled: true, activeCA: true, roster: [], reason: "" }; renderBrowser();`);
   const offered = buttons();
   assert.equal(offered.length, 1, "exactly one invite offer: the koi machine");
-  assert.match(offered[0].text, /Invite to pond/);
+  assert.match(offered[0].text, /Invite to mesh/);
 
-  // gate 4: a rostered host is the pond itself, not a stranger
+  // gate 4: a rostered host is the mesh itself, not a stranger
   probe(ctx, `trustGate = { certmeshEnabled: true, activeCA: true,
     roster: [{ hostname: "sparkle.internal" }], reason: "" }; renderBrowser();`);
   assert.equal(buttons().length, 0, "rostered koi machines are not strangers");
@@ -473,13 +473,13 @@ function actionLabels(document) {
 
 test("ca-mgmt: each role sees exactly the actions it can take", async ({ }) => {}, { skip: true });
 
-test("ca-mgmt: an open node can create a CA or join a pond — nothing else", async () => {
+test("ca-mgmt: an open node can set up CertMesh or join a mesh — nothing else", async () => {
   const { ctx, document } = await boot();
   probe(ctx, `renderTrust(
     { certmeshEnabled: true, activeCA: false, isMember: false, roster: [], reason: "ready" },
     { ca_initialized: false, members: [] }, ${JSON.stringify(OPEN_DIAG)})`);
   const labels = actionLabels(document);
-  assert.deepEqual(labels, ["Create a CA here…", "Join a pond…"]);
+  assert.deepEqual(labels, ["Set up CertMesh…", "Join a mesh…"]);
   // no ceremony, no revoke anywhere: this machine grants nothing
   assert.equal(document.getElementById("trust-ceremony-form").hidden, true);
 });
@@ -492,7 +492,7 @@ test("ca-mgmt: an active CA manages enrollment, renewal, and destruction", async
   assert.ok(labels.includes("Renew identity"));
   assert.ok(labels.includes("Destroy this CA…"));
   assert.ok(!labels.includes("Create a CA here…"), "the CA exists; no create");
-  assert.ok(!labels.includes("Join a pond…"), "the CA is not a join candidate");
+  assert.ok(!labels.includes("Join a mesh…"), "the CA is not a join candidate");
   // ceremony + roster + revoke live for the grantor
   assert.equal(document.getElementById("trust-ceremony-form").hidden, false);
   const memberRows = [...document.getElementById("trust-members").children]
@@ -520,7 +520,7 @@ test("ca-mgmt: a member renews its identity — grants live elsewhere", async ()
     { certmeshEnabled: true, activeCA: false, isMember: true, roster: [], reason: "" },
     { ca_initialized: false, members: [] }, ${JSON.stringify(MEMBER_DIAG)})`);
   assert.deepEqual(actionLabels(document), ["Renew identity"]);
-  assert.match(document.getElementById("trust-role").textContent, /member of a pond/);
+  assert.match(document.getElementById("trust-role").textContent, /member of a mesh/);
   assert.equal(document.getElementById("trust-ceremony-form").hidden, true);
 });
 

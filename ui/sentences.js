@@ -103,7 +103,7 @@
       case "dns.txt_removed":
         return `DNS TXT record for ${data.name} removed`;
       case "certmesh.joined":
-        return `${data.hostname} joined the pond's trust (cert granted)`;
+        return `${data.hostname} joined the mesh (cert granted)`;
       case "certmesh.revoked":
         return `${data.hostname} was revoked — it no longer speaks our TLS`;
       case "certmesh.destroyed":
