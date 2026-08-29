@@ -251,6 +251,7 @@ let streamState = "connecting";
 let discoverFilter = "";
 let typeFilter = "";
 let stateFilter = "";
+let discoverLens = "family"; // the curated pond by default; "all" is the raw water
 
 const LIVE_MS = 90 * 1000;
 const FADING_MS = 10 * 60 * 1000;
@@ -303,6 +304,10 @@ function agoText(ts) {
 }
 
 function passesFilters(r) {
+  // Discover is the curated lens (the pond): the koi family plus starred
+  // subjects. Everything else lives in the Browser pane (the water) —
+  // a lens, never a silent absence.
+  if (discoverLens === "family" && !isFamily(r) && !feed.watched.has("announcement:" + (r.name || r.instance_name || ""))) return false;
   if (typeFilter && r.service_type !== typeFilter) return false;
   const p = presence(r);
   if (stateFilter === "live" && p !== "live") return false;
@@ -328,6 +333,7 @@ function upsertInstance(record) {
   renderGroupFor(next);
   updateDiscoverTiles();
   refreshTypeDropdown();
+  if (browserIsActive()) renderBrowser();
 }
 
 function markGone(evt) {
@@ -337,6 +343,7 @@ function markGone(evt) {
   r.gone = true;
   r.goneAt = Date.now();
   renderGroupFor(r);
+  if (browserIsActive()) renderBrowser();
 }
 
 function instanceRowKey(r) {
@@ -495,6 +502,7 @@ async function seedSnapshot() {
   try {
     const snap = await fetchDiscoverSnapshot();
     dlog(`snapshot ok: instances=${(snap.instances ?? []).length}`);
+    latestSnapRaw = snap;
     for (const meta of snap.service_types ?? []) {
       if (meta.service_type) {
         typeLabels.set(meta.service_type, { label: meta.label, description: meta.description });
@@ -507,6 +515,7 @@ async function seedSnapshot() {
   }
   updateDiscoverTiles();
   refreshTypeDropdown();
+  renderBrowser();
   feedNotify(); // glance digest mirrors discovery facts
 }
 
@@ -552,11 +561,16 @@ setInterval(() => {
     if (node.className !== before) changedPresence = true;
   }
   if (changedPresence) { renderAllGroups(); }
+  if (browserIsActive()) renderBrowser();
   updateDiscoverTiles();
 }, 5000);
 
 document.getElementById("discover-filter")?.addEventListener("input", (e) => {
   discoverFilter = e.target.value.trim().toLowerCase();
+  renderAllGroups();
+});
+document.getElementById("discover-lens")?.addEventListener("change", (e) => {
+  discoverLens = e.target.value === "all" ? "all" : "family";
   renderAllGroups();
 });
 document.getElementById("discover-type")?.addEventListener("change", (e) => {
@@ -810,6 +824,170 @@ function renderGlance() {
   if (glanceIsActive()) glanceMarkSeen();
 }
 feed.listeners.add(renderGlance);
+
+// ── Browser: the raw lens (cycle-1 WP3) ──────────────────────────────
+// Discover is the pond (curated); the Browser is the water (raw): every
+// announcement the daemon hears, koi or not, with its TXT records expanded
+// on selection and the type dictionary shown. Everything here is a state
+// the daemon declared — its snapshot's first/last seen are the diary, its
+// removals are shown, never hidden.
+const browser = {};
+for (const id of ["browser-queue", "browser-count", "browser-types", "browser-instances",
+                  "browser-filter", "browser-type", "browser-state", "browser-burst",
+                  "browser-refresh", "browser-cache-age"]) {
+  browser[id] = document.getElementById(id);
+}
+let browserFilter = "";
+let browserTypeFilter = "";
+let browserStateFilter = "";
+let browserExpandedKey = null;
+let latestSnapRaw = null;
+
+function browserIsActive() {
+  return document.getElementById("view-browser")?.classList.contains("active");
+}
+
+function seenTs(r, field) {
+  const raw = r[field];
+  if (raw) {
+    const t = Date.parse(raw);
+    if (!isNaN(t)) return t;
+  }
+  return null;
+}
+
+function shortTime(ts) {
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function isRemoved(r) {
+  return r.gone === true || !!r.removed_at;
+}
+
+function browserPassesFilters(r) {
+  if (browserTypeFilter && r.service_type !== browserTypeFilter) return false;
+  if (browserStateFilter === "live" && isRemoved(r)) return false;
+  if (browserStateFilter === "removed" && !isRemoved(r)) return false;
+  if (browserFilter) {
+    const hay = `${r.instance_name || ""} ${r.name || ""} ${r.service_type} ${r.host || ""} ${r.ip || ""}`.toLowerCase();
+    if (!hay.includes(browserFilter)) return false;
+  }
+  return true;
+}
+
+function browserDetail(r) {
+  const div = document.createElement("div");
+  div.className = "row-detail";
+  const meta = typeLabels.get(r.service_type);
+  const lines = [];
+  lines.push(`type ${r.service_type}${meta?.label ? " — " + meta.label : ""}`);
+  if (meta?.description) lines.push(meta.description);
+  if (r.host) lines.push(`host ${r.host.replace(/\.$/, "")}`);
+  if (r.ip) lines.push(`address ${r.ip}`);
+  if (r.port != null) lines.push(`port ${r.port}`);
+  lines.push(`resolved: ${r.resolved ? "yes" : "address not resolved yet"}`);
+  const first = seenTs(r, "first_seen");
+  if (first != null) lines.push(`first seen ${shortTime(first)}`);
+  if (r.removed_at) lines.push(`withdrawn ${r.removed_at}`);
+  for (const [k, v] of Object.entries(r.txt ?? {})) lines.push(`TXT ${k} = ${v}`);
+  if (!Object.keys(r.txt ?? {}).length) lines.push("no TXT records");
+  div.textContent = lines.join("  ·  ");
+  return div;
+}
+
+function browserRow(r) {
+  const k = key(r);
+  const removed = isRemoved(r);
+  const node = document.createElement("div");
+  node.className = "row browser" + (removed ? " removed" : "") + (isFamily(r) ? " family" : "");
+  const lastTs = seenTs(r, "last_seen") ?? r.seenAt ?? Date.now();
+  const firstTs = seenTs(r, "first_seen");
+  node.innerHTML =
+    `<div class="med-mini${isFamily(r) ? " family" : ""}">${isFamily(r) ? "◆" : "·"}</div>` +
+    `<div class="row-tool">${escapeHtml(typeLabel(r.service_type))}</div>` +
+    `<div class="row-activity">${escapeHtml(r.instance_name || r.name)}${removed ? ' <span class="sub">· withdrawn</span>' : ""}</div>` +
+    `<div class="row-client mono">${escapeHtml(r.host ? r.host.replace(/\.$/, "") + (r.port ? ":" + r.port : "") : (r.ip || "—"))}</div>` +
+    `<div class="row-dur" title="${firstTs != null ? escapeHtml(new Date(firstTs).toISOString()) : ""}">${firstTs != null ? escapeHtml(shortTime(firstTs)) : "—"}</div>` +
+    `<div class="row-cap">${escapeHtml(agoText(lastTs))}</div>`;
+  node.addEventListener("click", () => {
+    browserExpandedKey = browserExpandedKey === k ? null : k;
+    renderBrowser();
+  });
+  if (browserExpandedKey === k) node.append(browserDetail(r));
+  return node;
+}
+
+function renderBrowser() {
+  const host = browser["browser-queue"];
+  if (!host) return;
+  host.textContent = "";
+  const all = [...instances.values()].filter(browserPassesFilters);
+  all.sort((a, b) => {
+    const la = seenTs(a, "last_seen") ?? a.seenAt ?? 0;
+    const lb = seenTs(b, "last_seen") ?? b.seenAt ?? 0;
+    return lb - la;
+  });
+  for (const r of all) host.append(browserRow(r));
+  if (!all.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = streamState === "offline"
+      ? "The daemon's browser cache is unreachable right now — nothing is invented here."
+      : "Nothing heard yet — announcements appear here as the daemon hears them.";
+    host.append(empty);
+  }
+  browser["browser-count"].textContent = `${all.length} announcement${all.length === 1 ? "" : "s"}`;
+  browser["browser-types"].textContent = String(new Set(all.map((r) => r.service_type)).size);
+  browser["browser-instances"].textContent = String(all.filter((r) => !isRemoved(r)).length);
+  const age = latestSnapRaw?.cache_age_secs;
+  browser["browser-cache-age"].textContent = age == null ? "" : `cache ${age}s old`;
+  browserRefreshTypes();
+}
+
+function browserRefreshTypes() {
+  const select = browser["browser-type"];
+  if (!select) return;
+  const types = [...new Set([...instances.values()].map((r) => r.service_type))].sort();
+  const current = select.value;
+  select.replaceChildren(
+    Object.assign(document.createElement("option"), { value: "", textContent: "All types" })
+  );
+  for (const t of types) {
+    select.append(Object.assign(document.createElement("option"), { value: t, textContent: typeLabel(t) }));
+  }
+  select.value = current;
+  if (select.value !== current) { select.value = ""; browserTypeFilter = ""; }
+}
+
+document.getElementById("browser-filter")?.addEventListener("input", (e) => {
+  browserFilter = e.target.value.trim().toLowerCase();
+  renderBrowser();
+});
+browser["browser-type"]?.addEventListener("change", (e) => {
+  browserTypeFilter = e.target.value;
+  renderBrowser();
+});
+browser["browser-state"]?.addEventListener("change", (e) => {
+  browserStateFilter = e.target.value;
+  renderBrowser();
+});
+browser["browser-refresh"]?.addEventListener("click", () => seedSnapshot());
+browser["browser-burst"]?.addEventListener("click", async () => {
+  setFact(el["t-stream"], "pinging…");
+  if (!invoke) {
+    browser["browser-count"].textContent = "burst needs the desktop workbench";
+    return;
+  }
+  try {
+    const result = await invoke("discover_ping");
+    setFact(el["t-stream"], `burst across ${result.types_known ?? 0} type(s)`, "ok");
+    setTimeout(seedSnapshot, 1500);
+  } catch (error) {
+    setFact(el["t-stream"], String(error), "down");
+  }
+});
 
 if (window.__TAURI__?.event?.listen) {
   // The Rust reader owns the real stream state; the UI never invents "live".

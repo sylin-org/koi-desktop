@@ -870,3 +870,16 @@ body.readonly .readonly-badge { display: inline-block; padding: 2px 10px;
   margin: 14px 2px 4px; color: var(--dim, #8b8b94);
   font: 500 9px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase;
 }
+
+/* ── Browser (cycle 1 WP3): the raw lens ────────────────────────────── */
+.row.browser { grid-template-columns: 24px 150px minmax(0, 1fr) minmax(0, 1fr) 90px 90px; cursor: pointer; }
+.row.browser.removed { opacity: 0.5; }
+.row.browser .med-mini:not(.family) { opacity: 0.35; }
+.row-detail {
+  grid-column: 1 / -1;
+  padding: 10px 12px 12px 47px;
+  color: var(--muted); font-size: 12px; line-height: 1.7;
+  background: rgba(96, 165, 250, 0.04);
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere; white-space: normal;
+}

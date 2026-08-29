@@ -146,3 +146,70 @@ test("stream cap: the feed stays bounded at 50 rows", async () => {
   `);
   assert.equal(probe(ctx, "feed.rows.length"), 50);
 });
+
+// ── WP3: the Browser (raw lens) + the Discover lens ──────────────────
+
+function seedRaw(ctx) {
+  // one koi-family announcement, one non-koi (printer), one withdrawn
+  probe(ctx, `
+    __advanceClock(1000);
+    upsertInstance({ service_type: "_koi-serve._tcp.local.", name: "sparkle", instance_name: "sparkle", host: "sparkle.internal.", ip: "192.168.1.137", port: 5641, txt: { path: "/v1/ui" }, resolved: true, first_seen: "2026-08-28T20:00:00+00:00", last_seen: new Date(Date.now() - 1000).toISOString() });
+    upsertInstance({ service_type: "_ipp._tcp.local.", name: "Brother HL", instance_name: "Brother HL-L2350", host: "BRW1.internal.", ip: "192.168.1.42", port: 631, txt: { rp: "ipp/print" }, resolved: true, first_seen: "2026-08-28T20:00:00+00:00", last_seen: new Date(Date.now() - 2000).toISOString() });
+    upsertInstance({ service_type: "_googlecast._tcp.local.", name: "Living Room", instance_name: "Living Room TV", host: "cast.internal.", ip: "192.168.1.50", port: 8009, txt: {}, resolved: false, removed_at: new Date(Date.now() - 3000).toISOString(), first_seen: "2026-08-28T20:00:00+00:00", last_seen: new Date(Date.now() - 3000).toISOString() });
+  `);
+}
+
+test("browser: the raw lens shows non-koi announcements the curated lens hides", async () => {
+  const { ctx, document } = await boot();
+  seedRaw(ctx);
+  probe(ctx, "renderBrowser()");
+  const rows = [...document.getElementById("browser-queue").children]
+    .filter((n) => n.className.startsWith("row browser"));
+  assert.equal(rows.length, 3, "printer + cast + koi all visible raw");
+  // discover defaults to the family lens: only the koi peer
+  probe(ctx, "renderAllGroups()");
+  const discoverRows = document.getElementById("discover-queue").querySelectorAll(".row");
+  assert.equal(discoverRows.length, 1, "curated lens hides the printer and the cast device");
+  // the "everything" lens opens the water
+  probe(ctx, `document.getElementById("discover-lens").value = "all"; discoverLens = "all"; renderAllGroups();`);
+  const rawRows = document.getElementById("discover-queue").querySelectorAll(".row");
+  assert.equal(rawRows.length, 3);
+});
+
+test("browser: removals are shown, never hidden", async () => {
+  const { ctx, document } = await boot();
+  seedRaw(ctx);
+  probe(ctx, "renderBrowser()");
+  const removed = [...document.getElementById("browser-queue").children]
+    .filter((n) => n.className.includes("removed"));
+  assert.equal(removed.length, 1, "the withdrawn cast device is still visible, dimmed");
+  // filter to active only
+  probe(ctx, `browserStateFilter = "live"; renderBrowser();`);
+  const active = [...document.getElementById("browser-queue").children]
+    .filter((n) => n.className.startsWith("row browser"));
+  assert.equal(active.length, 2);
+});
+
+test("browser: a row expands to its TXT records and type dictionary", async () => {
+  const { ctx, document } = await boot();
+  seedRaw(ctx);
+  probe(ctx, `browserExpandedKey = "_ipp._tcp.local. Brother HL"; renderBrowser();`);
+  const detail = document.getElementById("browser-queue").querySelector(".row-detail");
+  assert.ok(detail, "the selected row expands");
+  assert.match(detail.textContent, /TXT rp = ipp\/print/);
+  // an expanded row of a dictionary-known type shows the friendly label
+  probe(ctx, `typeLabels.set("_koi-serve._tcp.local.", { label: "Koi serve", description: "The pond's own service" });
+    browserExpandedKey = "_koi-serve._tcp.local. sparkle"; renderBrowser();`);
+  const koiDetail = [...document.getElementById("browser-queue").querySelectorAll(".row-detail")][0];
+  assert.match(koiDetail.textContent, /Koi serve/);
+  assert.match(koiDetail.textContent, /The pond's own service/);
+});
+
+test("browser: family members carry the diamond in the raw view too", async () => {
+  const { ctx, document } = await boot();
+  seedRaw(ctx);
+  probe(ctx, "renderBrowser()");
+  const family = [...document.getElementById("browser-queue").children]
+    .filter((n) => n.className.includes("family"));
+  assert.equal(family.length, 1, "one family row among the raw water");
+});

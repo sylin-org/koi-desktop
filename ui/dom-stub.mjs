@@ -178,7 +178,19 @@ export function loadWorkbench(uiRoot, files = ["sentences.js", "app.js"]) {
     setTimeout: (fn) => { timers.push(fn); return timers.length; },
     clearTimeout: () => {},
     console,
-    Date: { now: () => clock },
+    Date: (() => {
+      // A Date that is still a constructor: instances are real Dates, the
+      // clock feeds Date.now(), and Date.parse stays genuine. The host Date
+      // is captured in the closure — cross-realm property lookups would wrap it.
+      const RealDate = Date;
+      function FakeDate(...args) {
+        return args.length === 0 ? new RealDate(clock) : new RealDate(...args);
+      }
+      FakeDate.prototype = RealDate.prototype;
+      FakeDate.now = () => clock;
+      FakeDate.parse = (s) => RealDate.parse(s);
+      return FakeDate;
+    })(),
     __advanceClock: (ms) => { clock += Number(ms); },
   };
   const ctx = vm.createContext(globals);

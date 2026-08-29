@@ -22,6 +22,7 @@
       <nav class="tabs" aria-label="Koi">
         <button class="tab active" type="button" data-view="glance" aria-current="page">Glance</button>
         <button class="tab" type="button" data-view="discover">Discover</button>
+        <button class="tab" type="button" data-view="browser">Browser</button>
         <button class="tab" type="button" data-view="dns">DNS</button>
         <button class="tab" type="button" data-view="status">Status</button>
         <button class="tab" type="button" data-view="about">About</button>
@@ -131,6 +132,10 @@
       <div class="queue-head" style="margin-top: 20px;">
         <span>Inhabitants of this network</span>
         <div class="queue-actions">
+          <select id="discover-lens" class="filter-select">
+            <option value="family">The family (curated)</option>
+            <option value="all">Everything (raw)</option>
+          </select>
           <select id="discover-type" class="filter-select">
             <option value="">All types</option>
           </select>
@@ -145,6 +150,45 @@
         </div>
       </div>
       <div class="queue" id="discover-queue"></div>
+    </section>
+
+    <!-- ── Browser (the raw lens) ─────────────────────────────────── -->
+    <section class="view" id="view-browser" data-page="browser" aria-label="Browser">
+      <div class="page-heading">
+        <div>
+          <span class="kicker">The water, not the pond</span>
+          <h1>Browser</h1>
+          <p>Every announcement on this network exactly as the daemon hears it — koi or not.
+             Click a row to expand its TXT records and type dictionary.</p>
+        </div>
+        <button class="ghost-button" type="button" id="browser-burst"
+          title="Ask every mDNS client on the LAN to answer now">Burst</button>
+        <button class="ghost-button" type="button" id="browser-refresh">Refresh</button>
+      </div>
+
+      <div class="card-grid">
+        <div class="tile"><h3>Stream</h3><p id="browser-cache-age">&hellip;</p></div>
+        <div class="tile"><h3>Types</h3><p class="mono" id="browser-types">&hellip;</p></div>
+        <div class="tile"><h3>Announcements</h3><p class="mono" id="browser-instances">&hellip;</p></div>
+        <div class="tile"><h3>Shown</h3><p class="mono" id="browser-count">&hellip;</p></div>
+      </div>
+
+      <div class="queue-head" style="margin-top: 20px;">
+        <span>Raw announcements</span>
+        <div class="queue-actions">
+          <select id="browser-type" class="filter-select">
+            <option value="">All types</option>
+          </select>
+          <select id="browser-state" class="filter-select">
+            <option value="">Active + withdrawn</option>
+            <option value="live">Active only</option>
+            <option value="removed">Withdrawn only</option>
+          </select>
+          <input id="browser-filter" type="search" class="filter-input" placeholder="Filter…"
+                 autocomplete="off" spellcheck="false" />
+        </div>
+      </div>
+      <div class="queue" id="browser-queue"></div>
     </section>
 
     <!-- ── Status ─────────────────────────────────────────────────── -->
