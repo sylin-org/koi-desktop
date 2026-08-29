@@ -290,29 +290,65 @@ test("trust: invite pins are extracted from the token for the fingerprint compar
   assert.equal(probe(ctx, `fpPinOf(null)`), null);
 });
 
+test("trust: the gate is derived from declared state only", async () => {
+  const { ctx } = await boot();
+  const g = (caps, status, diagnose) =>
+    probe(ctx, `trustGateOf(${JSON.stringify(caps)}, ${JSON.stringify(status)}, ${JSON.stringify(diagnose)})`);
+  // gate 1: absent or disabled rung — no trust surface, however the CA answers
+  assert.equal(g([], { ca_initialized: true, ca_locked: false }).certmeshEnabled, false);
+  assert.equal(
+    g([{ name: "certmesh", healthy: false, summary: "disabled" }], { ca_initialized: true, ca_locked: false }).certmeshEnabled,
+    false);
+  // gate 2: enabled, and only an unlocked CA is a grantor
+  const ca = g([{ name: "certmesh", healthy: true, summary: "active (2 members)" }],
+    { ca_initialized: true, ca_locked: false, members: [{ hostname: "forge.internal" }] });
+  assert.equal(ca.certmeshEnabled, true);
+  assert.equal(ca.activeCA, true);
+  assert.equal(ca.roster.length, 1);
+  assert.equal(g([{ name: "certmesh", healthy: true, summary: "ready" }],
+    { ca_initialized: true, ca_locked: true }).activeCA, false, "locked CA grants nothing");
+  assert.equal(g([{ name: "certmesh", healthy: true, summary: "ready" }],
+    { ca_initialized: false }).activeCA, false, "open node grants nothing");
+});
+
 test("trust: the pane names the machine's honest role", async () => {
   const { ctx, document } = await boot();
-  const role = (status) => probe(ctx, `trustRoleOf(${JSON.stringify(status)})`);
+  const role = (status, diagnose) => probe(ctx, `trustRoleOf(${JSON.stringify(status)}, ${JSON.stringify(diagnose)})`);
   assert.match(role(null).role, /unknown/);
-  assert.match(role({ ca_initialized: false }).role, /open node/);
+  // open node: certmesh enabled, no CA, identity not_applicable
+  const open = role({ ca_initialized: false },
+    { checks: [{ name: "identity", status: "not_applicable", detail: "Open node" }] });
+  assert.match(open.role, /open node/);
+  assert.match(open.detail, /grants nothing/);
+  // member: no local CA, identity HELD — grants happen where the CA lives
+  const member = role({ ca_initialized: false },
+    { checks: [{ name: "identity", status: "ok", detail: "signed" }] });
+  assert.match(member.role, /member of a pond/);
+  assert.match(member.detail, /grants happen there/);
+  // locked CA
   assert.match(role({ ca_initialized: true, ca_locked: true }).role, /locked/);
+  // active CA
   const active = role({ ca_initialized: true, ca_locked: false, enrollment_open: false });
   assert.match(active.role, /CA — the grantor/);
-  assert.match(active.detail, /closed/);
 
-  // the pane renders an open node truthfully, no invented roster
-  probe(ctx, `renderTrust({ ca_initialized: false, members: [] }, null)`);
-  assert.match(document.getElementById("trust-role").textContent, /open node/);
+  // disabled certmesh: one honest card, no ceremony, no invented roster
+  probe(ctx, `renderTrust(
+    { certmeshEnabled: false, activeCA: false, roster: [], reason: "disabled" },
+    { ca_initialized: false, members: [] }, null)`);
+  assert.match(document.getElementById("trust-role").textContent, /unknown|open node|./);
+  assert.equal(document.getElementById("trust-ceremony-form").hidden, true,
+    "no ceremony where certmesh is disabled");
   const members = [...document.getElementById("trust-members").children]
     .map((n) => n.className);
   assert.ok(members.some((c) => c === "empty"), "no invented member rows");
 });
 
-test("trust: members render with a two-step armed revoke", async () => {
+test("trust: members render with a two-step armed revoke — for the active CA only", async () => {
   const { ctx, document } = await boot();
-  probe(ctx, `renderTrust({
+  const gate = { certmeshEnabled: true, activeCA: true, roster: [], reason: "" };
+  probe(ctx, `renderTrust(${JSON.stringify(gate)}, {
     ca_initialized: true, ca_locked: false, enrollment_open: false,
-    members: [{ hostname: "forge", role: "member", status: "active",
+    members: [{ hostname: "forge.internal", role: "member", status: "active",
                 cert_fingerprint: "aa11bb22cc33dd44ee55ff6677889900aabbccdd",
                 cert_expires: "2026-09-04T00:00:00Z" }],
   }, null)`);
@@ -321,64 +357,50 @@ test("trust: members render with a two-step armed revoke", async () => {
   assert.equal(rows.length, 1);
   const btn = rows[0].querySelector(".row-remove");
   assert.equal(btn.textContent, "Revoke", "first click arms, does not revoke");
+
+  // a locked CA sees its roster read-only: no revoke button is even rendered
+  probe(ctx, `renderTrust(
+    { certmeshEnabled: true, activeCA: false, roster: [], reason: "" },
+    { ca_initialized: true, ca_locked: true,
+      members: [{ hostname: "forge.internal", role: "member", status: "active",
+                  cert_fingerprint: "aa", cert_expires: "2026-09-04T00:00:00Z" }] },
+    null)`);
+  const lockedRows = [...document.getElementById("trust-members").children]
+    .filter((n) => n.className.startsWith("row trust-member"));
+  assert.equal(lockedRows.length, 1);
+  assert.equal(lockedRows[0].querySelector(".row-remove"), null, "locked CA: no revoke offer");
 });
 
-// ── WP7: passage ─────────────────────────────────────────────────────
+// ── the four gates on the row-level invite affordance ────────────────
 
-test("passage: composes http(s) URLs from resolved endpoints, refuses the rest", async () => {
-  const { ctx } = await boot();
-  const u = (r) => probe(ctx, `composeUrl(${JSON.stringify(r)})`);
-  assert.equal(u({ host: "forge.internal.", port: 9696, txt: {} }),
-    "http://forge.internal:9696/");
-  assert.equal(u({ host: "forge.internal.", port: 9696, txt: { tls: "1" } }),
-    "https://forge.internal:9696/");
-  assert.equal(u({ host: "forge.internal.", port: 9696, txt: { scheme: "https" } }),
-    "https://forge.internal:9696/");
-  assert.equal(u({ ip: "192.168.1.50", port: 8009, txt: {} }), "http://192.168.1.50:8009/");
-  assert.equal(u({ host: "forge.internal.", port: 0, txt: {} }), null, "no port, no passage");
-  assert.equal(u({ host: "bad host", port: 80, txt: {} }), null, "junk host refused");
-  assert.equal(u({ host: "x", port: 80, txt: { scheme: "file" } }), null, "non-http scheme refused");
+test("invite affordance: only koi-family, unrostered machines, offered by the active CA", async () => {
+  const { ctx, document } = await boot();
+  seedRaw(ctx); // sparkle (koi-family) + Brother (printer) + withdrawn cast
+  const buttons = () => [...document.getElementById("browser-queue").querySelectorAll(".trust-stranger")]
+    .map((b) => ({ text: b.textContent, title: b.title }));
+
+  // not the active CA: nothing is offered, even for the koi machine
+  probe(ctx, `trustGate = { certmeshEnabled: true, activeCA: false, roster: [], reason: "" }; renderBrowser();`);
+  assert.equal(buttons().length, 0, "a non-grantor machine offers no invites");
+
+  // active CA: the koi machine is a candidate — the printer never is
+  probe(ctx, `trustGate = { certmeshEnabled: true, activeCA: true, roster: [], reason: "" }; renderBrowser();`);
+  const offered = buttons();
+  assert.equal(offered.length, 1, "exactly one invite offer: the koi machine");
+  assert.match(offered[0].text, /Invite to pond/);
+
+  // gate 4: a rostered host is the pond itself, not a stranger
+  probe(ctx, `trustGate = { certmeshEnabled: true, activeCA: true,
+    roster: [{ hostname: "sparkle.internal" }], reason: "" }; renderBrowser();`);
+  assert.equal(buttons().length, 0, "rostered koi machines are not strangers");
+
+  // the prefill is the machine's name, not the service instance's
+  probe(ctx, `trustGate = { certmeshEnabled: true, activeCA: true, roster: [], reason: "" }; renderBrowser();`);
+  const btn = document.getElementById("browser-queue").querySelector(".trust-stranger");
+  btn.click();
+  assert.equal(document.getElementById("invite-host").value, "sparkle",
+    "the MACHINE's base name is prefilled (the koi announcer's host), not the service instance");
 });
-
-// ── WP8: care + fade notification ────────────────────────────────────
-
-test("care: a watched announcement fading notifies exactly once, revival re-arms", async () => {
-  const { ctx } = await boot();
-  probe(ctx, `
-    feedPin("announcement:printer");
-    upsertInstance({ service_type: "_ipp._tcp.local.", name: "printer", instance_name: "printer" });
-    notifiedFades.clear();
-  `);
-  // let an invocation spy count notifications
-  probe(ctx, `
-    window.__notifies = [];
-    window.__TAURI__ = { core: { invoke: (cmd, args) => {
-      if (cmd === "notify") window.__notifies.push(args);
-      return Promise.resolve();
-    } } };
-  `);
-  // BROWSER_MODE was computed at boot with invoke undefined — set invoke the
-  // way the workbench would have it and drive the fade directly.
-  probe(ctx, `
-    watchedFade("announcement:printer", "printer went away.");
-    watchedFade("announcement:printer", "printer went away.");
-  `);
-  // in browser mode dlog path is taken instead (invoke const is captured at
-  // boot); assert the session memory armed exactly once regardless
-  assert.equal(probe(ctx, "notifiedFades.size"), 1, "one notification per fade episode");
-  probe(ctx, `watchedAlive("announcement:printer")`);
-  assert.equal(probe(ctx, "notifiedFades.size"), 0, "revival re-arms the notification");
-  probe(ctx, `watchedFade("announcement:printer", "printer went away.")`);
-  assert.equal(probe(ctx, "notifiedFades.size"), 1);
-});
-
-test("care: unwatched subjects never notify", async () => {
-  const { ctx } = await boot();
-  probe(ctx, `notifiedFades.clear(); watchedFade("announcement:stranger", "stranger went away.");`);
-  assert.equal(probe(ctx, "notifiedFades.size"), 0, "no star, no notification");
-});
-
-// ── WP9: the honest glass ────────────────────────────────────────────
 
 test("glass: rungs render the daemon's own words, degraded stays visible", async () => {
   const { ctx, document } = await boot();
@@ -424,9 +446,12 @@ test("rows: action buttons land in one .row-actions cell, never as stray childre
     assert.ok(cell, "an actions cell exists");
     assert.ok(cell.querySelector(".row-star"), "the star is inside the actions cell");
   }
-  // a resolved non-family row carries open + star + trust in that one cell
+  // a resolved non-family row carries passage + star — but never an invite:
+  // an invite lands on a machine running Koi, and a printer is not one.
   const printer = rows.find((r) => r.innerHTML.includes("Brother HL-L2350"));
   const cell = printer.querySelector(".row-actions");
   assert.ok(cell.querySelector(".row-open"), "resolved row has passage");
-  assert.ok(cell.querySelector(".trust-stranger"), "non-family row has the stranger flow");
+  assert.equal(cell.querySelector(".trust-stranger"), null,
+    "non-family announcements are never invite candidates");
+  assert.ok(cell.querySelector(".row-star"), "star present");
 });

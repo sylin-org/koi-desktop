@@ -236,6 +236,8 @@ for (const tab of document.querySelectorAll(".tab")) {
     for (const view of document.querySelectorAll(".view")) {
       view.classList.toggle("active", view.dataset.page === tab.dataset.view);
     }
+    if (tab.dataset.view === "trust") refreshTrust();
+    if (tab.dataset.view === "glass") refreshGlass();
   });
 }
 
@@ -439,6 +441,21 @@ function renderGroupFor(r) {
   group.header.innerHTML =
     `<span class="g-name">${escapeHtml(deviceOf(latest))}</span>` +
     `<span class="g-meta">${members.filter((m) => presence(m) !== "gone").length} live · ${members.length} services</span>`;
+  // A device group IS a machine: when it runs Koi, is unrostered, and this
+  // machine is the active CA, the header offers the invite.
+  if (isFamily(latest) && canInviteMachine(latest.host || deviceOf(latest))) {
+    const oldBtn = group.header.querySelector(".trust-stranger");
+    if (oldBtn) oldBtn.remove();
+    const invite = document.createElement("button");
+    invite.className = "row-remove trust-stranger";
+    invite.type = "button";
+    invite.textContent = "Invite to pond…";
+    invite.title = "This machine runs Koi but is not in the roster — mint it an invite";
+    invite.addEventListener("click", () => {
+      inviteMachine(baseName(latest.host || deviceOf(latest)) || deviceOf(latest));
+    });
+    group.header.append(invite);
+  }
   // rows
   const rk = instanceRowKey(r);
   let node = group.nodes.get(rk);
@@ -970,15 +987,18 @@ function browserRow(r) {
   node.append(actions);
   if (r.resolved && r.port) actions.append(passageButton(r));
   actions.append(starButton(r));
-  if (!isFamily(r)) {
+  // An invite lands on a machine running Koi: only koi-family announcements
+  // are candidates, and only the active CA may offer one (gates 2–4).
+  const host = r.host || r.ip || "";
+  if (isFamily(r) && canInviteMachine(host)) {
     const invite = document.createElement("button");
     invite.className = "row-remove trust-stranger";
     invite.type = "button";
-    invite.textContent = "Trust…";
-    invite.title = "This announcer holds no invite from the pond — open the grant ceremony";
+    invite.textContent = "Invite to pond…";
+    invite.title = "This machine runs Koi but is not in the roster — mint it an invite";
     invite.addEventListener("click", (e) => {
       e.stopPropagation();
-      trustStranger(r.instance_name || r.name || r.service_type);
+      inviteMachine(baseName(host) || r.instance_name || r.name);
     });
     actions.append(invite);
   }
@@ -1361,15 +1381,59 @@ document.getElementById("btn-glass")?.addEventListener("click", () => gotoView("
 // by side and the invite stays locked until the operator states they compared
 // them character by character. Revocation is armed (two clicks), labeled
 // grantor → grantee, and every action lands in the daemon's audit trail.
+//
+// Trust surfaces are GATED (they are promises, and unkept promises lie):
+//   1. certmesh enabled on this daemon (a ladder rung that is not "disabled") —
+//      otherwise there is no pond to grant into, only the honest card;
+//   2. this machine is the ACTIVE CA — a member or open node has nothing it
+//      can grant; grants happen where the CA lives;
+//   3. an invite lands on a machine RUNNING KOI — so the only strangers the
+//      rows ever offer are koi-family announcements;
+//   4. not already in the roster — pond members are not strangers.
 const trust = {};
 for (const id of ["trust-note", "trust-role", "trust-detail", "trust-members-count",
                   "trust-members", "invite-host", "invite-ttl", "invite-mint",
                   "ceremony", "grant-label", "grant-consequence", "fp-ca", "fp-invite",
                   "fp-compared", "invite-token", "invite-expires", "invite-note",
-                  "audit-log", "audit-refresh", "trust-refresh"]) {
+                  "audit-log", "audit-refresh", "trust-refresh",
+                  "trust-ceremony-form", "trust-ceremony-head"]) {
   trust[id] = document.getElementById(id);
 }
 let lastCertmeshStatus = null;
+let trustGate = { certmeshEnabled: false, activeCA: false, roster: [], reason: "" };
+
+// Derive the gate from declared state only: the ladder rung (capability),
+// the CA status (grantor + roster), and the diagnose (member vs open).
+function trustGateOf(caps, status, diagnose) {
+  const rung = (caps ?? []).find((c) => c.name === "certmesh");
+  if (!rung || (rung.summary ?? "") === "disabled") {
+    return {
+      certmeshEnabled: false, activeCA: false, roster: [],
+      reason: rung?.summary || "absent from this daemon's capability ladder",
+    };
+  }
+  const ca = status ?? {};
+  const activeCA = ca.ca_initialized === true && ca.ca_locked === false;
+  void diagnose;
+  return { certmeshEnabled: true, activeCA, roster: ca.members ?? [], reason: rung.summary };
+}
+
+// Machine names compare by base label: roster hostnames are `.internal`,
+// mDNS announcements are `.local.` — the first label is the machine either way.
+function baseName(s) {
+  return String(s ?? "").trim().replace(/\.$/, "").split(".")[0].toLowerCase();
+}
+
+function inRoster(host) {
+  const b = baseName(host);
+  return b !== "" && trustGate.roster.some((m) => baseName(m.hostname) === b);
+}
+
+// Whether THIS row's host may be offered an invite (gates 2–4; gate 1 hides
+// the whole trust surface before rows ever ask).
+function canInviteMachine(host) {
+  return trustGate.activeCA && !inRoster(host);
+}
 
 // The invite code is `<secret>.<ca_fingerprint>` (ADR-017 F3) — the part
 // after the first separator is the fingerprint the joiner pins. Pure + tested.
@@ -1379,23 +1443,36 @@ function fpPinOf(inviteToken) {
   return i >= 0 && i < s.length - 1 ? s.slice(i + 1) : null;
 }
 
-// The honest role this machine plays in the pond's trust.
-function trustRoleOf(status) {
+// The honest role this machine plays in the pond's trust. The diagnose tells
+// an open node from a member (identity not_applicable vs held) — the CA
+// status alone cannot.
+function trustRoleOf(status, diagnose) {
   if (!status) return { role: "unknown", detail: "The daemon did not answer." };
-  if (!status.ca_initialized) {
+  if (status.ca_initialized && !status.ca_locked) {
     return {
-      role: "open node",
-      detail: "This machine holds no trust role yet — it has no CA and no identity. " +
-        "Create one with `koi certmesh create`, or join an existing CA with `koi certmesh join`.",
+      role: "CA — the grantor",
+      detail: "This machine signs the pond's identities. Enrollment is " +
+        (status.enrollment_open ? "OPEN (new members can join)" : "closed (invites only)") + ".",
     };
   }
-  if (status.ca_locked) {
-    return { role: "CA (locked)", detail: "The CA is locked — unlock with `koi certmesh unlock` to mint invites." };
+  if (status.ca_initialized) {
+    return { role: "CA (locked)",
+      detail: "The CA is locked — unlock with `koi certmesh unlock` to mint invites. " +
+        "Locked CAs grant nothing, and this pane offers no stranger invites either." };
+  }
+  const identity = (diagnose?.checks ?? []).find((c) => c.name === "identity");
+  if (identity && !/not_applicable/i.test(identity.status ?? "")) {
+    return {
+      role: "member of a pond",
+      detail: "This machine holds an identity signed elsewhere — the CA lives on " +
+        "another machine, and grants happen there. Nothing on this machine can mint an invite.",
+    };
   }
   return {
-    role: "CA — the grantor",
-    detail: "This machine signs the pond's identities. Enrollment is " +
-      (status.enrollment_open ? "OPEN (new members can join)" : "closed (invites only)") + ".",
+    role: "open node",
+    detail: "This machine holds no trust role yet — it has no CA and no identity. " +
+      "Create one with `koi certmesh create`, or join an existing CA with `koi certmesh join`. " +
+      "Until it is a CA, it grants nothing.",
   };
 }
 
@@ -1410,15 +1487,24 @@ function shortFp(fp) {
   return s.length > 20 ? s.slice(0, 10) + "…" + s.slice(-8) : s;
 }
 
-function renderTrustMembers(status) {
+function renderTrustMembers(status, gate) {
   const host = trust["trust-members"];
   host.textContent = "";
   const members = status?.members ?? [];
-  trust["trust-members-count"].textContent = `${members.length} member${members.length === 1 ? "" : "s"}`;
+  trust["trust-members-count"].textContent = gate?.certmeshEnabled
+    ? `${members.length} member${members.length === 1 ? "" : "s"}`
+    : "no roster";
+  if (!gate?.certmeshEnabled) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "certmesh is disabled on this daemon — there is no pond membership here.";
+    host.append(empty);
+    return;
+  }
   if (!status?.ca_initialized) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "No CA on this machine — the roster would live here.";
+    empty.textContent = "The CA lives on another machine — its roster lives there too.";
     host.append(empty);
     return;
   }
@@ -1439,12 +1525,14 @@ function renderTrustMembers(status) {
       `<span class="sub"> · cert ${escapeHtml(shortFp(m.cert_fingerprint))}</span></div>` +
       `<div class="row-client">${escapeHtml(String(m.cert_expires ?? "").slice(0, 10))}</div>` +
       `<div class="row-cap"></div>`;
-    // The danger action is a real element (two-step armed), not innerHTML.
-    const revoke = document.createElement("button");
-    revoke.className = "row-remove danger-button";
-    revoke.type = "button";
-    revoke.textContent = "Revoke";
-    node.append(revoke);
+    // The danger action is a real element (two-step armed), not innerHTML —
+    // and only the active CA may even see it.
+    if (gate?.activeCA) {
+      const revoke = document.createElement("button");
+      revoke.className = "row-remove danger-button";
+      revoke.type = "button";
+      revoke.textContent = "Revoke";
+      node.append(revoke);
     revoke.addEventListener("click", async () => {
       if (!invoke) { trustNote("Revocation needs the desktop workbench.", true); return; }
       if (revoke.dataset.armed !== "yes") {
@@ -1465,16 +1553,29 @@ function renderTrustMembers(status) {
         trustNote(String(error), true);
       }
     });
+    node.append(revoke);
+    }
     host.append(node);
   }
 }
 
-function renderTrust(status, diagnose) {
-  const role = trustRoleOf(status);
+function renderTrust(gate, status, diagnose) {
+  trustGate = gate;
+  lastCertmeshStatus = status;
+  const role = trustRoleOf(status, diagnose);
   trust["trust-role"].textContent = role.role;
   trust["trust-detail"].textContent = role.detail;
-  lastCertmeshStatus = status;
-  renderTrustMembers(status);
+  // The ceremony is a grantor's instrument; hide it wherever minting is
+  // impossible rather than shipping a form that can only fail.
+  const canGrant = gate.certmeshEnabled && gate.activeCA;
+  trust["trust-ceremony-form"].hidden = !canGrant;
+  trust["trust-ceremony-head"].hidden = !canGrant;
+  trust["ceremony"].hidden = trust["ceremony"].hidden || !canGrant;
+  renderTrustMembers(status, gate);
+  if (!gate.certmeshEnabled) {
+    trust["audit-log"].textContent =
+      "certmesh is disabled on this daemon (" + gate.reason + ") — no audit trail exists here.";
+  }
 }
 
 async function refreshTrust() {
@@ -1484,17 +1585,18 @@ async function refreshTrust() {
       "The phone view can read the pond's public state; the ceremony and audit stay local.";
     return;
   }
+  let caps = null;
+  try { caps = (await invoke("daemon_status_full"))?.capabilities ?? null; } catch (_) {}
   let status = null;
-  try {
-    status = await invoke("certmesh_status");
-  } catch (error) {
-    trust["trust-role"].textContent = "The daemon did not answer";
-    trust["trust-detail"].textContent = String(error);
-    return;
-  }
+  try { status = await invoke("certmesh_status"); } catch (_) {}
   let diagnose = null;
   try { diagnose = await invoke("certmesh_diagnose"); } catch (_) {}
-  renderTrust(status, diagnose);
+  if (!caps && !status) {
+    trust["trust-role"].textContent = "The daemon did not answer";
+    trust["trust-detail"].textContent = "Nothing about trust is known, so nothing about trust is claimed.";
+    return;
+  }
+  renderTrust(trustGateOf(caps, status, diagnose), status, diagnose);
 }
 
 function closeCeremony() {
@@ -1504,6 +1606,8 @@ function closeCeremony() {
 
 async function mintInvite() {
   if (!invoke) { trustNote("The ceremony needs the desktop workbench.", true); return; }
+  if (!trustGate.certmeshEnabled) { trustNote("certmesh is disabled on this daemon — nothing to grant.", true); return; }
+  if (!trustGate.activeCA) { trustNote("Only the CA mints invites — this machine is not the grantor.", true); return; }
   const hostname = trust["invite-host"].value.trim();
   if (!hostname) { trustNote("Name the member you are granting to.", true); return; }
   const ttlRaw = trust["invite-ttl"].value.trim();
@@ -1560,13 +1664,15 @@ async function refreshAudit() {
 }
 trust["audit-refresh"]?.addEventListener("click", refreshAudit);
 
-// Stranger flow (E6): an unknown announcer in the Browser pane arrives here
-// with its name prefilled. Nothing is granted without the full ceremony.
-function trustStranger(name) {
+// Stranger flow (E6, gated): the ONLY stranger an invite can reach is a
+// machine that already runs Koi (it announces koi-family), isn't in the
+// roster, and is being offered by the active CA. The affordance prefills the
+// HOST's name — machines join ponds, services don't.
+function inviteMachine(name) {
   if (!trust["invite-host"]) return;
   trust["invite-host"].value = String(name ?? "");
-  trustNote(`${name} announced itself and holds no invite from this pond. If it is yours, ` +
-    "mint it an invite; if it is not, doing nothing grants it nothing.");
+  trustNote(`${name} runs Koi and is not in this pond's roster. If it is yours, ` +
+    "mint it an invite and run the join on that machine; if it is not, doing nothing grants it nothing.");
   gotoView("trust");
 }
 
@@ -1775,5 +1881,6 @@ startDiscover();
 invoke?.("status_events_start");
 refreshStatus();
 loadDns();
+refreshTrust(); // gates the row-level invite affordances from the start
 // Safety net only: the stream is the driver; this catches missed pushes.
 setInterval(refreshStatus, 60000);
