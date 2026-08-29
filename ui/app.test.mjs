@@ -247,3 +247,33 @@ test("diff: nodes persist and the selects rebuild", async () => {
   assert.match(b.children[0].textContent, /brook/);
   assert.match(probe(ctx, `localStorage.getItem("koi-diff-nodes")`), /192\.168\.1\.44/);
 });
+
+// ── WP5: deaf-detection verdict ──────────────────────────────────────
+
+test("deaf verdict: no burst yet, hearing, deaf, and stale-silence states", async () => {
+  const { ctx } = await boot();
+  const v = (b) => probe(ctx, `deafVerdict(${JSON.stringify(b)})`);
+  assert.match(v(null).text, /No query burst/);
+  assert.match(v({ bursts_sent: 0 }).text, /No query burst/);
+  const heard = v({ bursts_sent: 3, answers_total: 9, last_burst_at: "x", last_burst_answers: 4, last_burst_age_secs: 12 });
+  assert.equal(heard.tone, "ok");
+  assert.match(heard.text, /heard 4 answers/);
+  const deaf = v({ bursts_sent: 3, answers_total: 0, last_burst_at: "x", last_burst_answers: 0, last_burst_age_secs: 30 });
+  assert.equal(deaf.tone, "bad");
+  assert.match(deaf.text, /firewall/);
+  const stale = v({ bursts_sent: 3, answers_total: 0, last_burst_at: "x", last_burst_answers: 0, last_burst_age_secs: 900 });
+  assert.equal(stale.tone, "warn");
+  assert.match(stale.text, /stale/);
+});
+
+test("deaf verdict: renders from the snapshot into the browser pane", async () => {
+  const { ctx, document } = await boot();
+  probe(ctx, `
+    latestSnapRaw = { burst: { bursts_sent: 2, answers_total: 0, last_burst_at: "2026-08-28T00:00:00Z", last_burst_answers: 0, last_burst_age_secs: 15 } };
+    renderBrowser();
+  `);
+  const verdict = document.getElementById("browser-verdict");
+  assert.equal(verdict.hidden, false);
+  assert.match(verdict.textContent, /Deaf\?/);
+  assert.ok(verdict.className.includes("bad"));
+});

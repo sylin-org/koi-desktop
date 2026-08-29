@@ -883,3 +883,10 @@ body.readonly .readonly-badge { display: inline-block; padding: 2px 10px;
   border-bottom: 1px solid var(--line);
   overflow-wrap: anywhere; white-space: normal;
 }
+
+/* ── Deaf-detection verdict (cycle 1 WP5) ───────────────────────────── */
+.action-note.verdict { display: block; margin: 10px 2px 0; font-size: 13px; }
+.action-note.verdict.ok { color: var(--ok, #4ade80); }
+.action-note.verdict.info { color: var(--muted, #8b8b94); }
+.action-note.verdict.warn { color: var(--attention, #fbbf24); }
+.action-note.verdict.bad { color: #f87171; }

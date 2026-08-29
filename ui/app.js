@@ -834,7 +834,7 @@ feed.listeners.add(renderGlance);
 const browser = {};
 for (const id of ["browser-queue", "browser-count", "browser-types", "browser-instances",
                   "browser-filter", "browser-type", "browser-state", "browser-burst",
-                  "browser-refresh", "browser-cache-age"]) {
+                  "browser-refresh", "browser-cache-age", "browser-verdict"]) {
   browser[id] = document.getElementById(id);
 }
 let browserFilter = "";
@@ -919,9 +919,34 @@ function browserRow(r) {
   return node;
 }
 
+// Deaf-detection verdict (WP5 / D6): the daemon measures bursts vs answers;
+// this turns those numbers into one honest sentence. A recent burst that
+// heard nothing is the firewall verdict — announcing is fine, hearing is the
+// half mDNS firewalls eat. A stale silent burst is judged inconclusive.
+function deafVerdict(burst) {
+  if (!burst || burst.bursts_sent === 0) {
+    return { tone: "info", text: "No query burst has gone out yet — press Burst to ask the pond a question." };
+  }
+  const age = burst.last_burst_age_secs;
+  if (burst.last_burst_answers > 0) {
+    return { tone: "ok", text: `Hearing the pond: the last burst (${age ?? "?"}s ago) heard ${burst.last_burst_answers} answer${burst.last_burst_answers === 1 ? "" : "s"}.` };
+  }
+  if (age != null && age <= 120) {
+    return { tone: "bad", text: `Deaf? The last burst (${age}s ago) heard nothing. Announcing without hearing usually means a firewall (mDNS udp 5353), not a quiet network.` };
+  }
+  return { tone: "warn", text: `The last burst (${age ?? "?"}s ago) heard nothing, but it is stale — burst again to re-test.` };
+}
+
 function renderBrowser() {
   const host = browser["browser-queue"];
   if (!host) return;
+  const verdictNode = browser["browser-verdict"];
+  if (verdictNode) {
+    const v = deafVerdict(latestSnapRaw?.burst);
+    verdictNode.hidden = false;
+    verdictNode.textContent = v.text;
+    verdictNode.className = "action-note verdict " + v.tone;
+  }
   host.textContent = "";
   const all = [...instances.values()].filter(browserPassesFilters);
   all.sort((a, b) => {
