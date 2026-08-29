@@ -17,13 +17,18 @@ Read FIRST, then re-verify every premise against the tree:
 
 ## Verified state (re-verify with git status + git log)
 
-- koi-desktop `main` at `865b682`+ : WP0 foundations (`11a9d52`), WP1 streaming hero
-  (`25ea695`), poke channel + EOF/timeout fixes (`8dcb1cd`), mascot integer-scale fix
-  (`2bac987`), mobile UI + QR (`e6c216d`), requirements/epic/handoff docs.
-- koi repo `main` at `c0688d5`+ : mobile serving (`8bb9e6c`: HttpConfig/AppState
-  `ui_dir`, `GET /` + assets, DAT-gated `PUT /v1/ui`), W7 Schannel settle-retry
-  (`0f7de9b`), service-lifecycle post-cutover adaptation (`345afad`), baseline
-  definition-vs-identity fix (`359337a`), poke bind retry + EOF fixes in lab.
+- koi-desktop `main` at `2ec0772`+ : WP0-WP9 LANDED (WP0 `11a9d52`, WP1 `25ea695`,
+  poke `69b76cb`+fixes, mascot `2bac987`, mobile+QR `e6c216d`, WP2 glance `4a9665d`,
+  WP3 browser `83d2160`, WP4 diff `e41d80a`, WP5 verdict `c3159ca`, WP6 trust
+  `795b8e9`, WP7 passage `46c4bf5`, WP8 care `aef85a8`, WP9 glass `2a51912`).
+  JS harness: `node --test ui/app.test.mjs` (25 cases). See
+  `docs/handoff-mobile-cycle.md` for the arc details and the physical tail
+  (WP10 CachyOS parity, trust ceremony, operator phone test).
+- koi repo `main`/`dev` at `2ebb868`+ : mobile serving (`8bb9e6c`), ADR-035
+  ladder work, **service-config fix (`4dc3ba5`: the Windows service ignored
+  config.toml — `Config::from_service_launch` now applies CLI > env > file >
+  default in service mode; LAN pond serving verified 200)**, **deaf-detection
+  counters (`2ebb868`: BurstStats in the browser cache/snapshot)**.
 - The koi service on this workstation: STOPPED at last check (TIME_WAIT race after a
   restart — wait 2–4 min, then `sc start koi` elevated). Config
   `%ProgramData%\koi\config.toml` has `http_bind = "0.0.0.0"` (mobile access ON).
