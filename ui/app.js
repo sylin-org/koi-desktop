@@ -345,6 +345,8 @@ function markGone(evt) {
   if (!r) return; // never seen here; nothing to remember
   r.gone = true;
   r.goneAt = Date.now();
+  const passageKeyGone = `${String(r.host || r.ip || "").replace(/\.$/, "").trim().toLowerCase()}:${r.port ?? ""}`;
+  passageCache.delete(passageKeyGone);
   watchedFade("announcement:" + (evt.name ?? r.name), `${r.instance_name || r.name} went away.`);
   renderGroupFor(r);
   if (browserIsActive()) renderBrowser();
@@ -405,7 +407,7 @@ function buildRow(r) {
   const actions = document.createElement("div");
   actions.className = "row-actions";
   node.append(actions);
-  if (r.resolved && r.port) actions.append(passageButton(r));
+  if (passageAllowedFor(r)) actions.append(passageButton(r));
   actions.append(starButton(r));
   node.addEventListener("animationend", () => node.classList.remove("landing"), { once: true });
   return node;
@@ -985,7 +987,7 @@ function browserRow(r) {
   const actions = document.createElement("div");
   actions.className = "row-actions";
   node.append(actions);
-  if (r.resolved && r.port) actions.append(passageButton(r));
+  if (passageAllowedFor(r)) actions.append(passageButton(r));
   actions.append(starButton(r));
   // An invite lands on a machine running Koi: only koi-family announcements
   // are candidates, and only the active CA may offer one (gates 2–4).
@@ -1262,21 +1264,84 @@ diff["diff-node-add"]?.addEventListener("click", () => {
 diffRefreshSelects();
 
 // ── Passage (cycle-1 WP7): one click to the working endpoint ─────────
-// Composed from what the daemon resolved — never from raw TXT alone. Only
-// http(s) is offered and the Rust side refuses anything else, so an
-// announcement can open a page but never execute anything.
-function composeUrl(r) {
+// An Open button is a PROMISE that an HTTP server answers there — so the
+// promise is probed before it is shown. The Rust side does the asking (the
+// webview holds no network): HEAD, then GET, any status counts. Verdicts are
+// memoized per endpoint for as long as the service stays listed; withdrawal
+// drops the verdict at once and a 10-minute TTL guards a port that changed
+// hands. A dead or unconfirmed endpoint shows NO button — the honest absence.
+function passageEndpointHost(r) {
+  return String(r.host || r.ip || "").replace(/\.$/, "").trim();
+}
+
+function passageKey(r) {
+  const host = passageEndpointHost(r);
+  const port = Number(r.port);
+  if (!host || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
+  return `${host.toLowerCase()}:${port}`;
+}
+
+const passageCache = new Map(); // "host:port" → {state: "alive"|"dead", scheme, at}
+const passageInFlight = new Set();
+const PASSAGE_TTL_MS = 10 * 60 * 1000;
+let passageRenderQueued = false;
+
+function composeUrl(r, schemeOverride) {
   const host = String(r.host || r.ip || "").replace(/\.$/, "").trim();
   const port = Number(r.port);
   if (!host || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
   if (!/^[a-zA-Z0-9.\-:]+$/.test(host)) return null;
-  const scheme = (r.txt?.scheme || (r.txt?.tls === "1" ? "https" : "http")).toLowerCase();
+  const scheme = String(schemeOverride || r.txt?.scheme || (r.txt?.tls === "1" ? "https" : "http")).toLowerCase();
   if (scheme !== "http" && scheme !== "https") return null;
   return `${scheme}://${host}:${port}/`;
 }
 
+function scheduleProbe(r) {
+  const key = passageKey(r);
+  if (!key || passageInFlight.has(key) || !invoke) return;
+  passageInFlight.add(key);
+  invoke("probe_http", { host: passageEndpointHost(r), port: Number(r.port) })
+    .then((scheme) => {
+      if (scheme) passageCache.set(key, { state: "alive", scheme, at: Date.now() });
+      else passageCache.set(key, { state: "dead", scheme: null, at: Date.now() });
+    })
+    .catch((error) => dlog(`probe ${key} failed: ${error}`))
+    .finally(() => {
+      passageInFlight.delete(key);
+      queuePassageRerender();
+    });
+}
+
+// One render pass for however many probes land in the same tick.
+function queuePassageRerender() {
+  if (passageRenderQueued) return;
+  passageRenderQueued = true;
+  setTimeout(() => {
+    passageRenderQueued = false;
+    if (document.getElementById("view-browser")?.classList.contains("active")) renderBrowser();
+    if (document.getElementById("view-discover")?.classList.contains("active")) renderAllGroups();
+  }, 50);
+}
+
+// Whether the Open button may be promised for this row right now. A fresh
+// "dead" memo refuses too — the honest absence, not a missing feature.
+function passageAllowedFor(r) {
+  if (!r.resolved || !r.port || isRemoved(r)) return false;
+  const key = passageKey(r);
+  if (!key) return false;
+  const entry = passageCache.get(key);
+  if (entry && Date.now() - entry.at < PASSAGE_TTL_MS) return entry.state === "alive";
+  scheduleProbe(r);
+  return false;
+}
+
+function passageSchemeOf(r) {
+  const entry = passageCache.get(passageKey(r));
+  return entry?.state === "alive" ? entry.scheme : null;
+}
+
 function openEndpoint(r) {
-  const url = composeUrl(r);
+  const url = composeUrl(r, passageSchemeOf(r));
   if (!url) { note("No usable endpoint on this inhabitant yet.", true); return; }
   if (!invoke) { note(`Endpoint: ${url}`, false); return; }
   invoke("open_url", { url })

@@ -99,6 +99,7 @@ fn run() -> Result<()> {
                 certmesh_close_enrollment,
                 certmesh_renew_self,
                 certmesh_join,
+                probe_http,
                 open_url,
                 notify,
                 daemon_status_full,
@@ -834,7 +835,55 @@ fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), Stri
         .map_err(|e| format!("notification refused: {e}"))
 }
 
-/// Passage (cycle-1 WP7): open a pond endpoint in the default browser.
+/// Passage liveness probe (operator direction): an Open button is only shown
+/// once an HTTP server has actually ANSWERED at the endpoint. HEAD first with
+/// GET as fallback; ANY status code counts (404/401 still mean "an HTTP server
+/// is listening" — the browser renders the page, we only claim the server).
+/// https is tried after http; a TLS-handshake failure stays unconfirmed rather
+/// than guessed (self-signed corners are F2's open question), so a dead port
+/// and an unprobeable port look the same to the UI: no button.
+///
+/// Returns the scheme that answered — the UI composes the URL from THIS, so
+/// the button never promises a scheme the probe did not verify.
+#[tauri::command]
+fn probe_http(host: String, port: u16) -> Result<Option<String>, String> {
+    let host = host.trim().trim_end_matches('.').to_string();
+    if host.is_empty()
+        || host.contains(['/', '\\', ' ', '@', '?', '#'])
+        || !(host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':')))
+    {
+        return Err("the endpoint host looks wrong".into());
+    }
+    if port == 0 {
+        return Err("the endpoint port looks wrong".into());
+    }
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(2))
+        .timeout(Duration::from_secs(3))
+        .build();
+    for scheme in ["http", "https"] {
+        let url = format!("{scheme}://{host}:{port}/");
+        for method in ["HEAD", "GET"] {
+            let request = if method == "HEAD" {
+                agent.head(&url)
+            } else {
+                agent.get(&url)
+            };
+            match request.call() {
+                // Any response at all — even 404/405/500 — is an HTTP server.
+                Ok(_) => return Ok(Some(scheme.to_string())),
+                Err(ureq::Error::Status(_, _)) => return Ok(Some(scheme.to_string())),
+                // Transport failure: try the fallback method/scheme, then dead.
+                Err(_) => continue,
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Care (cycle-1 WP8): one OS notification when a watched inhabitant fades.
 /// Only http(s) passes — an mDNS announcement never gets to execute anything.
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {

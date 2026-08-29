@@ -446,14 +446,61 @@ test("rows: action buttons land in one .row-actions cell, never as stray childre
     assert.ok(cell, "an actions cell exists");
     assert.ok(cell.querySelector(".row-star"), "the star is inside the actions cell");
   }
-  // a resolved non-family row carries passage + star — but never an invite:
-  // an invite lands on a machine running Koi, and a printer is not one.
+  // a resolved non-family row carries star — but no Open until the probe
+  // confirms an HTTP server, and never an invite: an invite lands on a
+  // machine running Koi, and a printer is not one.
   const printer = rows.find((r) => r.innerHTML.includes("Brother HL-L2350"));
   const cell = printer.querySelector(".row-actions");
-  assert.ok(cell.querySelector(".row-open"), "resolved row has passage");
+  assert.equal(cell.querySelector(".row-open"), null,
+    "no Open button before the probe confirms HTTP");
   assert.equal(cell.querySelector(".trust-stranger"), null,
     "non-family announcements are never invite candidates");
   assert.ok(cell.querySelector(".row-star"), "star present");
+});
+
+test("passage: the probe verdict is memoized per endpoint and drives the button", async () => {
+  const { ctx, document } = await boot();
+  seedRaw(ctx);
+
+  // unprobed: no button, and the probe is scheduled (checking state)
+  probe(ctx, `trustGate = { certmeshEnabled: true, activeCA: true, roster: [], reason: "" }; renderBrowser();`);
+  assert.equal(document.getElementById("browser-queue").querySelector(".row-open"), null,
+    "no promise before the probe answers");
+  assert.equal(probe(ctx, `passageInFlight.size`), 0,
+    "browser mode cannot probe (no invoke) — honestly buttonless");
+
+  // a live verdict shows the button and composes the URL from the PROBED scheme
+  probe(ctx, `
+    passageCache.set("brw1.internal:631", { state: "alive", scheme: "http", at: Date.now() });
+    renderBrowser();
+  `);
+  const btn = document.getElementById("browser-queue").querySelector(".row-open");
+  assert.ok(btn, "confirmed endpoint gets its Open button");
+  btn.click();
+  assert.match(document.getElementById("action-note").textContent,
+    /Endpoint: http:\/\/BRW1\.internal:631\//i,
+    "the URL is the probed scheme");
+
+  // a dead verdict refuses — and stays refused within the TTL
+  probe(ctx, `
+    passageCache.set("brw1.internal:631", { state: "dead", scheme: null, at: Date.now() });
+    renderBrowser();
+  `);
+  assert.equal(document.getElementById("browser-queue").querySelector(".row-open"), null,
+    "a probed-dead endpoint keeps no button");
+});
+
+test("passage: withdrawal drops the memo at once", async () => {
+  const { ctx } = await boot();
+  probe(ctx, `
+    upsertInstance({ service_type: "_ipp._tcp.local.", name: "Brother HL",
+      instance_name: "Brother HL", host: "BRW1.internal.", ip: "192.168.1.42",
+      port: 631, txt: {}, resolved: true });
+    passageCache.set("brw1.internal:631", { state: "alive", scheme: "http", at: Date.now() });
+    markGone({ service_type: "_ipp._tcp.local.", name: "Brother HL" });
+  `);
+  assert.equal(probe(ctx, `passageCache.has("brw1.internal:631")`), false,
+    "withdrawn services lose their passage verdict immediately");
 });
 
 // ── CA + membership management: the role-adaptive action strip ───────
