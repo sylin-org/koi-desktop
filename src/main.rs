@@ -91,6 +91,7 @@ fn run() -> Result<()> {
                 certmesh_log,
                 certmesh_invite,
                 certmesh_revoke,
+                open_url,
                 status_events_start,
                 debug_log
             ])
@@ -470,6 +471,38 @@ fn daemon_json(
         return Ok(serde_json::json!({ "ok": true }));
     }
     serde_json::from_str(&text).map_err(|e| format!("{path} malformed: {e}"))
+}
+
+/// Passage (cycle-1 WP7): open a pond endpoint in the default browser.
+/// Only http(s) passes — an mDNS announcement never gets to execute anything.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let url = url.trim();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("only http(s) URLs can be opened".into());
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .map_err(|e| format!("could not open {url}: {e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("could not open {url}: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("could not open {url}: {e}"))?;
+    }
+    Ok(())
 }
 
 // ── Trust pane (cycle-1 WP6): the certmesh doors ────────────────────

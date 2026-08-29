@@ -377,6 +377,7 @@ function buildRow(r) {
   const node = document.createElement("div");
   node.className = rowClass(r) + " landing";
   node.innerHTML = rowMarkup(r);
+  if (r.resolved && r.port) node.append(passageButton(r));
   node.addEventListener("animationend", () => node.classList.remove("landing"), { once: true });
   return node;
 }
@@ -915,6 +916,7 @@ function browserRow(r) {
     browserExpandedKey = browserExpandedKey === k ? null : k;
     renderBrowser();
   });
+  if (r.resolved && r.port) node.append(passageButton(r));
   if (!isFamily(r)) {
     const invite = document.createElement("button");
     invite.className = "row-remove trust-stranger";
@@ -1185,6 +1187,42 @@ diff["diff-node-add"]?.addEventListener("click", () => {
 });
 
 diffRefreshSelects();
+
+// ── Passage (cycle-1 WP7): one click to the working endpoint ─────────
+// Composed from what the daemon resolved — never from raw TXT alone. Only
+// http(s) is offered and the Rust side refuses anything else, so an
+// announcement can open a page but never execute anything.
+function composeUrl(r) {
+  const host = String(r.host || r.ip || "").replace(/\.$/, "").trim();
+  const port = Number(r.port);
+  if (!host || !Number.isInteger(port) || port <= 0 || port > 65535) return null;
+  if (!/^[a-zA-Z0-9.\-:]+$/.test(host)) return null;
+  const scheme = (r.txt?.scheme || (r.txt?.tls === "1" ? "https" : "http")).toLowerCase();
+  if (scheme !== "http" && scheme !== "https") return null;
+  return `${scheme}://${host}:${port}/`;
+}
+
+function openEndpoint(r) {
+  const url = composeUrl(r);
+  if (!url) { note("No usable endpoint on this inhabitant yet.", true); return; }
+  if (!invoke) { note(`Endpoint: ${url}`, false); return; }
+  invoke("open_url", { url })
+    .then(() => note(`Opened ${url} in your browser.`))
+    .catch((error) => note(String(error), true));
+}
+
+function passageButton(r) {
+  const btn = document.createElement("button");
+  btn.className = "row-open";
+  btn.type = "button";
+  btn.textContent = "Open";
+  btn.title = "Open the working endpoint in your browser";
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openEndpoint(r);
+  });
+  return btn;
+}
 
 // ── Trust pane (cycle-1 WP6): ceremony + audit ───────────────────────
 // Friction is the feature: the grant ceremony places BOTH fingerprints side

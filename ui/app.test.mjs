@@ -322,3 +322,20 @@ test("trust: members render with a two-step armed revoke", async () => {
   const btn = rows[0].querySelector(".row-remove");
   assert.equal(btn.textContent, "Revoke", "first click arms, does not revoke");
 });
+
+// ── WP7: passage ─────────────────────────────────────────────────────
+
+test("passage: composes http(s) URLs from resolved endpoints, refuses the rest", async () => {
+  const { ctx } = await boot();
+  const u = (r) => probe(ctx, `composeUrl(${JSON.stringify(r)})`);
+  assert.equal(u({ host: "forge.internal.", port: 9696, txt: {} }),
+    "http://forge.internal:9696/");
+  assert.equal(u({ host: "forge.internal.", port: 9696, txt: { tls: "1" } }),
+    "https://forge.internal:9696/");
+  assert.equal(u({ host: "forge.internal.", port: 9696, txt: { scheme: "https" } }),
+    "https://forge.internal:9696/");
+  assert.equal(u({ ip: "192.168.1.50", port: 8009, txt: {} }), "http://192.168.1.50:8009/");
+  assert.equal(u({ host: "forge.internal.", port: 0, txt: {} }), null, "no port, no passage");
+  assert.equal(u({ host: "bad host", port: 80, txt: {} }), null, "junk host refused");
+  assert.equal(u({ host: "x", port: 80, txt: { scheme: "file" } }), null, "non-http scheme refused");
+});
