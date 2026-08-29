@@ -68,6 +68,7 @@ fn run() -> Result<()> {
                     .args(["--minimized"])
                     .build(),
             )
+            .plugin(tauri_plugin_notification::init())
             .invoke_handler(tauri::generate_handler![
                 service_status,
                 service_start,
@@ -92,6 +93,7 @@ fn run() -> Result<()> {
                 certmesh_invite,
                 certmesh_revoke,
                 open_url,
+                notify,
                 status_events_start,
                 debug_log
             ])
@@ -471,6 +473,20 @@ fn daemon_json(
         return Ok(serde_json::json!({ "ok": true }));
     }
     serde_json::from_str(&text).map_err(|e| format!("{path} malformed: {e}"))
+}
+
+/// Care (cycle-1 WP8): one OS notification when a watched inhabitant fades.
+/// Opt-in by starring; never more than one per fade episode. Degrades
+/// honestly — if the platform refuses, the command says so.
+#[tauri::command]
+fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| format!("notification refused: {e}"))
 }
 
 /// Passage (cycle-1 WP7): open a pond endpoint in the default browser.

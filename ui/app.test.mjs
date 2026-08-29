@@ -339,3 +339,41 @@ test("passage: composes http(s) URLs from resolved endpoints, refuses the rest",
   assert.equal(u({ host: "bad host", port: 80, txt: {} }), null, "junk host refused");
   assert.equal(u({ host: "x", port: 80, txt: { scheme: "file" } }), null, "non-http scheme refused");
 });
+
+// ── WP8: care + fade notification ────────────────────────────────────
+
+test("care: a watched announcement fading notifies exactly once, revival re-arms", async () => {
+  const { ctx } = await boot();
+  probe(ctx, `
+    feedPin("announcement:printer");
+    upsertInstance({ service_type: "_ipp._tcp.local.", name: "printer", instance_name: "printer" });
+    notifiedFades.clear();
+  `);
+  // let an invocation spy count notifications
+  probe(ctx, `
+    window.__notifies = [];
+    window.__TAURI__ = { core: { invoke: (cmd, args) => {
+      if (cmd === "notify") window.__notifies.push(args);
+      return Promise.resolve();
+    } } };
+  `);
+  // BROWSER_MODE was computed at boot with invoke undefined — set invoke the
+  // way the workbench would have it and drive the fade directly.
+  probe(ctx, `
+    watchedFade("announcement:printer", "printer went away.");
+    watchedFade("announcement:printer", "printer went away.");
+  `);
+  // in browser mode dlog path is taken instead (invoke const is captured at
+  // boot); assert the session memory armed exactly once regardless
+  assert.equal(probe(ctx, "notifiedFades.size"), 1, "one notification per fade episode");
+  probe(ctx, `watchedAlive("announcement:printer")`);
+  assert.equal(probe(ctx, "notifiedFades.size"), 0, "revival re-arms the notification");
+  probe(ctx, `watchedFade("announcement:printer", "printer went away.")`);
+  assert.equal(probe(ctx, "notifiedFades.size"), 1);
+});
+
+test("care: unwatched subjects never notify", async () => {
+  const { ctx } = await boot();
+  probe(ctx, `notifiedFades.clear(); watchedFade("announcement:stranger", "stranger went away.");`);
+  assert.equal(probe(ctx, "notifiedFades.size"), 0, "no star, no notification");
+});

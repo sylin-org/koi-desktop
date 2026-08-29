@@ -330,6 +330,7 @@ function upsertInstance(record) {
     gone: false,
   };
   instances.set(k, next);
+  watchedAlive("announcement:" + next.name);
   renderGroupFor(next);
   updateDiscoverTiles();
   refreshTypeDropdown();
@@ -342,6 +343,7 @@ function markGone(evt) {
   if (!r) return; // never seen here; nothing to remember
   r.gone = true;
   r.goneAt = Date.now();
+  watchedFade("announcement:" + (evt.name ?? r.name), `${r.instance_name || r.name} went away.`);
   renderGroupFor(r);
   if (browserIsActive()) renderBrowser();
 }
@@ -373,11 +375,33 @@ function rowClass(r) {
   return cls;
 }
 
+function starButton(r) {
+  const subject = "announcement:" + (r.name || r.instance_name);
+  const btn = document.createElement("button");
+  btn.className = "row-star";
+  btn.type = "button";
+  const paint = () => {
+    const on = feed.watched.has(subject);
+    btn.textContent = on ? "★" : "☆";
+    btn.title = on ? "Unwatch — no more fade notifications" : "Watch — notify me when it fades";
+    btn.classList.toggle("pinned", on);
+  };
+  paint();
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    feed.watched.has(subject) ? feedUnpin(subject) : feedPin(subject);
+    paint();
+  });
+  feed.listeners.add(paint);
+  return btn;
+}
+
 function buildRow(r) {
   const node = document.createElement("div");
   node.className = rowClass(r) + " landing";
   node.innerHTML = rowMarkup(r);
   if (r.resolved && r.port) node.append(passageButton(r));
+  node.append(starButton(r));
   node.addEventListener("animationend", () => node.classList.remove("landing"), { once: true });
   return node;
 }
@@ -668,6 +692,11 @@ function feedAdmit(entry) {
     target: entry.target, subject: entry.subject, kind: entry.kind,
   });
   if (feed.rows.length > STREAM_CAP) feed.rows.length = STREAM_CAP;
+  if (entry.kind === "runtime.stopped") {
+    watchedFade(entry.subject, entry.line + ".");
+  } else if (entry.kind === "runtime.started" || entry.kind === "runtime.reconnected") {
+    watchedAlive(entry.subject);
+  }
   feedNotify();
 }
 
@@ -685,6 +714,23 @@ function feedUnpin(subject) {
   feed.watched.delete(subject);
   feedWatchedSave();
   feedNotify();
+}
+
+// ── Care (WP8/H1): one OS notification when a watched subject fades ──
+// Opt-in by starring; one notification per fade episode — returning to life
+// re-arms it. The plugin refusal degrades to the debug sink, never a lie.
+const notifiedFades = new Set();
+
+function watchedFade(subject, line) {
+  if (!feed.watched.has(subject) || notifiedFades.has(subject)) return;
+  notifiedFades.add(subject);
+  if (!invoke) { dlog(`fade (watched): ${line}`); return; }
+  invoke("notify", { title: "Koi — a watched inhabitant faded", body: line })
+    .catch((error) => dlog(`notification failed: ${error}`));
+}
+
+function watchedAlive(subject) {
+  if (notifiedFades.has(subject)) notifiedFades.delete(subject);
 }
 
 function gotoView(view) {
@@ -917,6 +963,7 @@ function browserRow(r) {
     renderBrowser();
   });
   if (r.resolved && r.port) node.append(passageButton(r));
+  node.append(starButton(r));
   if (!isFamily(r)) {
     const invite = document.createElement("button");
     invite.className = "row-remove trust-stranger";

@@ -913,3 +913,8 @@ body.readonly #audit-refresh, body.readonly #invite-mint { display: none !import
   background: none;
 }
 .row-open:hover { border-color: rgba(96, 165, 250, .9); background: rgba(96, 165, 250, .08); }
+
+/* ── Care (cycle 1 WP8): stars on rows ──────────────────────────────── */
+.row-star { justify-self: end; font-size: 13px; cursor: pointer; border: none;
+  background: none; color: var(--dim, #8b8b94); padding: 0 2px; opacity: .6; }
+.row-star:hover, .row-star.pinned { opacity: 1; color: var(--a, #60a5fa); }
