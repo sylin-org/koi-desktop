@@ -23,6 +23,7 @@
         <button class="tab active" type="button" data-view="glance" aria-current="page">Glance</button>
         <button class="tab" type="button" data-view="discover">Discover</button>
         <button class="tab" type="button" data-view="browser">Browser</button>
+        <button class="tab" type="button" data-view="diff">Diff</button>
         <button class="tab" type="button" data-view="dns">DNS</button>
         <button class="tab" type="button" data-view="status">Status</button>
         <button class="tab" type="button" data-view="about">About</button>
@@ -189,6 +190,45 @@
         </div>
       </div>
       <div class="queue" id="browser-queue"></div>
+    </section>
+
+    <!-- ── Diff (cross-host) ──────────────────────────────────────── -->
+    <section class="view" id="view-diff" data-page="diff" aria-label="Cross-host diff">
+      <div class="page-heading">
+        <div>
+          <span class="kicker">Two ponds, side by side</span>
+          <h1>Diff</h1>
+          <p>What two daemons hear, bucketed: seen by both, only A, only B.
+             A multicast partition, made visible.</p>
+        </div>
+        <button class="ghost-button" type="button" id="diff-go">Diff now</button>
+      </div>
+
+      <article class="strip">
+        <div class="form-grid four">
+          <label class="field"><span class="kicker">Node A</span>
+            <select id="diff-a" class="filter-select wide">
+              <option value="">This machine</option>
+            </select>
+          </label>
+          <label class="field"><span class="kicker">Node B</span>
+            <select id="diff-b" class="filter-select wide"></select>
+          </label>
+        </div>
+      </article>
+      <article class="strip">
+        <div class="form-grid four">
+          <label class="field"><span class="kicker">Add node: name</span>
+            <input id="diff-node-name" class="filter-input wide" placeholder="brook" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field"><span class="kicker">address:port</span>
+            <input id="diff-node-address" class="filter-input wide" placeholder="192.168.1.44:5641" autocomplete="off" spellcheck="false" />
+          </label>
+          <button class="ghost-button" type="button" id="diff-node-add">Add node</button>
+        </div>
+      </article>
+      <p class="action-note" id="diff-note"></p>
+      <div id="diff-results" class="status-stream"></div>
     </section>
 
     <!-- ── Status ─────────────────────────────────────────────────── -->

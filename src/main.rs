@@ -164,6 +164,30 @@ fn get_json(agent: &ureq::Agent, url: String) -> Option<serde_json::Value> {
     serde_json::from_str(&text).ok()
 }
 
+/// GET a validated URL and return the body, or the honest reason it refused:
+/// non-2xx daemons answer with a JSON error (`capability_disabled`, …) that
+/// names the cause — the pane shows the daemon's own words, never "no data".
+fn get_json_or_reason(agent: &ureq::Agent, url: String) -> Result<serde_json::Value, String> {
+    match agent.get(&url).call() {
+        Ok(response) => {
+            let body = response
+                .into_string()
+                .map_err(|e| format!("{url}: unreadable body: {e}"))?;
+            serde_json::from_str(&body).map_err(|e| format!("{url}: malformed body: {e}"))
+        }
+        Err(ureq::Error::Status(code, response)) => {
+            let reason = response
+                .into_string()
+                .unwrap_or_else(|_| "no body".to_string());
+            Err(format!(
+                "{url}: {code}: {}",
+                reason.chars().take(300).collect::<String>()
+            ))
+        }
+        Err(e) => Err(format!("{url}: {e}")),
+    }
+}
+
 /// Read-only GET against any node's daemon (cycle-1 WP0): the cross-host
 /// browser and future scope views read sibling daemons' declared state. GETs
 /// are the LAN-readable surface by design; mutations never ride this command.
@@ -183,7 +207,7 @@ fn validate_daemon_get(address: &str, port: u16, path: &str) -> Result<String, S
 #[tauri::command]
 fn daemon_get(address: String, port: u16, path: String) -> Result<serde_json::Value, String> {
     let url = validate_daemon_get(&address, port, &path)?;
-    get_json(&daemon_agent(), url.clone()).ok_or_else(|| format!("{url}: no data"))
+    get_json_or_reason(&daemon_agent(), url)
 }
 
 const UI_POKE_PORT: u16 = 5640;

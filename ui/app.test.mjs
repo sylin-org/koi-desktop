@@ -213,3 +213,37 @@ test("browser: family members carry the diamond in the raw view too", async () =
     .filter((n) => n.className.includes("family"));
   assert.equal(family.length, 1, "one family row among the raw water");
 });
+
+// ── WP4: the cross-host diff ─────────────────────────────────────────
+
+test("diff: three buckets over (type, name), withdrawals never count as seen", async () => {
+  const { ctx } = await boot();
+  const out = probe(ctx, `
+    diffInstances(
+      [
+        { service_type: "_koi-serve._tcp.local.", name: "sparkle", instance_name: "sparkle", host: "a.internal.", port: 5641 },
+        { service_type: "_ipp._tcp.local.", name: "Brother", instance_name: "Brother", host: "b.internal.", port: 631 },
+        { service_type: "_googlecast._tcp.local.", name: "gone", instance_name: "gone", removed_at: "2026-08-28T00:00:00+00:00" },
+      ],
+      [
+        { service_type: "_koi-serve._tcp.local.", name: "sparkle", instance_name: "sparkle", host: "a2.internal.", port: 5641 },
+        { service_type: "_hap._tcp.local.", name: "Lamp", instance_name: "Lamp", host: "c.internal.", port: 8080 },
+      ],
+    )
+  `);
+  assert.equal(out.both.length, 1, "sparkle seen by both");
+  assert.equal(out.onlyA.length, 1, "the printer only on A");
+  assert.equal(out.onlyB.length, 1, "the lamp only on B");
+  assert.equal(out.both[0][0].name, "sparkle");
+});
+
+test("diff: nodes persist and the selects rebuild", async () => {
+  const { ctx, document } = await boot();
+  probe(ctx, `diffSaveNodes([{ name: "brook", address: "192.168.1.44", port: 5641 }]); diffRefreshSelects();`);
+  const a = document.getElementById("diff-a");
+  const b = document.getElementById("diff-b");
+  assert.equal(a.children.length, 2, "this machine + brook");
+  assert.equal(b.children.length, 1, "nodes only for B");
+  assert.match(b.children[0].textContent, /brook/);
+  assert.match(probe(ctx, `localStorage.getItem("koi-diff-nodes")`), /192\.168\.1\.44/);
+});

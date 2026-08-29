@@ -989,6 +989,166 @@ browser["browser-burst"]?.addEventListener("click", async () => {
   }
 });
 
+// ── Cross-host diff (cycle-1 WP4) ────────────────────────────────────
+// The unique capability: koi has daemons on every machine, so "why can't
+// forge see the printer" has an answer — fetch two nodes' raw snapshots and
+// show three buckets: what both see, what only A sees, what only B sees.
+// A multicast partition, made visible. The diff compares daemon-declared
+// state only; an unreachable node is an honest error, never half-data.
+const diff = {};
+for (const id of ["diff-a", "diff-b", "diff-go", "diff-note", "diff-results",
+                  "diff-node-name", "diff-node-address", "diff-node-add"]) {
+  diff[id] = document.getElementById(id);
+}
+
+function diffNodes() {
+  let nodes = [];
+  try { nodes = JSON.parse(localStorage.getItem("koi-diff-nodes") || "[]"); } catch (_) {}
+  return Array.isArray(nodes) ? nodes : [];
+}
+
+function diffSaveNodes(nodes) {
+  localStorage.setItem("koi-diff-nodes", JSON.stringify(nodes));
+}
+
+function diffRefreshSelects() {
+  const nodes = diffNodes();
+  for (const [id, extra] of [["diff-a", { value: "", textContent: "This machine" }],
+                             ["diff-b", null]]) {
+    const select = diff[id];
+    if (!select) continue;
+    const current = select.value;
+    select.replaceChildren();
+    if (extra) select.append(Object.assign(document.createElement("option"), extra));
+    for (const n of nodes) {
+      select.append(Object.assign(document.createElement("option"),
+        { value: `${n.address}:${n.port}`, textContent: `${n.name} (${n.address}:${n.port})` }));
+    }
+    select.value = current;
+    if (select.value !== current) select.value = select.firstElementChild?.value ?? "";
+  }
+}
+
+// The pure core: three buckets over (type, name) keys. Both rows carry the
+// side that saw them most recently so the pane can show last-heard.
+function diffInstances(a, b) {
+  const index = (list) => {
+    const map = new Map();
+    for (const r of list ?? []) {
+      if (isRemoved(r)) continue; // withdrawn announcements are not "seen"
+      map.set(key(r), r);
+    }
+    return map;
+  };
+  const ma = index(a);
+  const mb = index(b);
+  const both = [];
+  const onlyA = [];
+  const onlyB = [];
+  for (const [k, r] of ma) {
+    if (mb.has(k)) both.push([r, mb.get(k)]);
+    else onlyA.push(r);
+  }
+  for (const [k, r] of mb) {
+    if (!ma.has(k)) onlyB.push(r);
+  }
+  return { both, onlyA, onlyB };
+}
+
+function diffRow(r) {
+  const div = document.createElement("div");
+  div.className = "stream-row";
+  const line = document.createElement("span");
+  line.className = "line";
+  const where = r.host ? r.host.replace(/\.$/, "") + (r.port ? ":" + r.port : "") : (r.ip || "");
+  line.textContent = `${typeLabel(r.service_type)} — ${r.instance_name || r.name}` +
+    (where ? ` at ${where}` : "");
+  div.append(line);
+  return div;
+}
+
+function diffBucket(host, label, rows) {
+  if (!rows.length) return;
+  const head = document.createElement("div");
+  head.className = "hap-group-head";
+  head.textContent = `${label} (${rows.length})`;
+  host.append(head);
+  for (const r of rows) host.append(diffRow(r));
+}
+
+async function diffFetchNode(selectValue) {
+  if (selectValue === "" || selectValue == null) {
+    const snap = await fetchDiscoverSnapshot();
+    return snap;
+  }
+  const [address, portRaw] = String(selectValue).split(":");
+  const port = Number(portRaw);
+  if (!address || !Number.isInteger(port)) throw new Error("node looks wrong");
+  if (!invoke) throw new Error("cross-host reads need the desktop workbench");
+  return await invoke("daemon_get", { address, port, path: "/v1/mdns/browser/snapshot" });
+}
+
+async function runDiff() {
+  const note = diff["diff-note"];
+  const results = diff["diff-results"];
+  if (!invoke) {
+    note.textContent = "The cross-host diff reads sibling daemons directly — it needs the desktop workbench.";
+    return;
+  }
+  diff["diff-go"].disabled = true;
+  note.textContent = "Reading both ponds…";
+  results.textContent = "";
+  try {
+    const [a, b] = await Promise.allSettled([
+      diffFetchNode(diff["diff-a"].value),
+      diffFetchNode(diff["diff-b"].value),
+    ]);
+    if (a.status === "rejected" || b.status === "rejected") {
+      const errs = [];
+      if (a.status === "rejected") errs.push(`node A: ${a.reason}`);
+      if (b.status === "rejected") errs.push(`node B: ${b.reason}`);
+      note.textContent = errs.join(" · ");
+      return;
+    }
+    const out = diffInstances(a.value?.instances, b.value?.instances);
+    const nameA = diff["diff-a"].selectedOptions[0]?.textContent ?? "A";
+    const nameB = diff["diff-b"].selectedOptions[0]?.textContent ?? "B";
+    note.textContent = `${nameA} vs ${nameB} — both: ${out.both.length}, only A: ${out.onlyA.length}, only B: ${out.onlyB.length}`;
+    diffBucket(results, "Seen by both", out.both.map(([r]) => r));
+    diffBucket(results, "Only " + nameA, out.onlyA);
+    diffBucket(results, "Only " + nameB, out.onlyB);
+    if (!out.both.length && !out.onlyA.length && !out.onlyB.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "Neither node has any active announcements.";
+      results.append(empty);
+    }
+  } finally {
+    diff["diff-go"].disabled = false;
+  }
+}
+
+diff["diff-go"]?.addEventListener("click", runDiff);
+diff["diff-node-add"]?.addEventListener("click", () => {
+  const name = diff["diff-node-name"].value.trim();
+  const addrRaw = diff["diff-node-address"].value.trim();
+  const [address, portRaw] = addrRaw.split(":");
+  const port = Number(portRaw);
+  if (!name || !address || !Number.isInteger(port) || port <= 0) {
+    diff["diff-note"].textContent = "Add a node as name + address:port (e.g. brook · 192.168.1.44:5641).";
+    return;
+  }
+  const nodes = diffNodes().filter((n) => n.address !== address || n.port !== port);
+  nodes.push({ name, address, port });
+  diffSaveNodes(nodes);
+  diff["diff-node-name"].value = "";
+  diff["diff-node-address"].value = "";
+  diffRefreshSelects();
+  diff["diff-note"].textContent = `${name} added.`;
+});
+
+diffRefreshSelects();
+
 if (window.__TAURI__?.event?.listen) {
   // The Rust reader owns the real stream state; the UI never invents "live".
   window.__TAURI__.event.listen("discover-stream", (event) => {
