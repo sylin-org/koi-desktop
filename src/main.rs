@@ -74,6 +74,9 @@ fn run() -> Result<()> {
                 service_stop,
                 daemon_run_once,
                 daemon_get,
+                pond_publish_ui,
+                pond_qr_svg,
+                pond_qr_target,
                 daemon_status,
                 discover_start,
                 discover_snapshot,
@@ -293,6 +296,68 @@ Connection: close
     }
     std::process::exit(0);
 }
+/// Publish the workbench's own interface to the daemon (cycle-1 WP-qr): the
+/// five UI files ride a DAT-authenticated PUT; the daemon then serves them at
+/// its LAN address so any browser on the network opens the same pond.
+#[tauri::command]
+fn pond_publish_ui() -> Result<serde_json::Value, String> {
+    let files = [
+        ("index.html", include_str!("../ui/index.html").to_string()),
+        ("app.js", include_str!("../ui/app.js").to_string()),
+        ("styles.css", include_str!("../ui/styles.css").to_string()),
+        (
+            "sentences.js",
+            include_str!("../ui/sentences.js").to_string(),
+        ),
+    ];
+    let mut entries = Vec::new();
+    for (path, content) in files {
+        entries.push(serde_json::json!({ "path": path, "content": content }));
+    }
+    let png = include_bytes!("../ui/koi.png");
+    use base64::Engine as _;
+    entries.push(serde_json::json!({
+        "path": "koi.png",
+        "content": base64::engine::general_purpose::STANDARD.encode(png),
+    }));
+    daemon_json(
+        "PUT",
+        "/v1/ui",
+        Some(serde_json::json!({ "files": entries })),
+    )
+}
+
+/// The LAN URL a phone should open: the daemon's address as seen from the
+/// network (routing-table lookup; no packet leaves the machine).
+#[tauri::command]
+fn pond_qr_target() -> Result<String, String> {
+    let sock =
+        std::net::UdpSocket::bind(("127.0.0.1", 0)).map_err(|e| format!("no local socket: {e}"))?;
+    sock.connect("192.168.1.1:80")
+        .or_else(|_| sock.connect("8.8.8.8:80"))
+        .map_err(|e| format!("no route: {e}"))?;
+    let ip = sock
+        .local_addr()
+        .map_err(|e| format!("no local addr: {e}"))?;
+    Ok(format!("http://{}:5641/", ip.ip()))
+}
+
+/// Render a QR code for `url` as a compact dark-theme SVG string.
+#[tauri::command]
+fn pond_qr_svg(url: String) -> Result<String, String> {
+    use qrcode::render::svg;
+    use qrcode::QrCode;
+    let code = QrCode::with_error_correction_level(url.as_bytes(), qrcode::EcLevel::M)
+        .map_err(|e| format!("qr encode failed: {e}"))?;
+    let image = code
+        .render()
+        .dark_color(svg::Color("#e8e8ec"))
+        .light_color(svg::Color("#0d0d11"))
+        .quiet_zone(true)
+        .build();
+    Ok(image)
+}
+
 fn daemon_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(3))

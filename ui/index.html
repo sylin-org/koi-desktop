@@ -125,7 +125,10 @@
             <h1 id="status-heading">Status</h1>
             <p>Whether the Koi daemon is running on this machine, and what it is serving.</p>
           </div>
-          <button class="ghost-button" type="button" id="refresh-status">Refresh</button>
+          <div>
+            <button class="ghost-button" type="button" id="refresh-status">Refresh</button>
+            <button class="ghost-button" type="button" id="btn-phone" title="Publish this interface and show a QR - opens the same pond on any screen on this network">Phone</button>
+          </div>
         </div>
 
         <article class="strip" id="status-hero" data-tone="">
@@ -220,6 +223,16 @@
     </main>
   </div>
 
+  <div class="modal-backdrop" id="qr-modal" hidden>
+    <div class="modal">
+      <h2 id="qr-title">Pond on your phone</h2>
+      <p id="qr-note">Working…</p>
+      <div id="qr-svg" class="qr-svg"></div>
+      <p class="mono" id="qr-url"></p>
+      <p class="modal-note">Read-only view for anyone on this network. Controls stay in the desktop workbench.</p>
+      <button class="ghost-button" type="button" id="qr-close">Close</button>
+    </div>
+  </div>
   <script src="sentences.js"></script>
   <script src="app.js"></script>
 </body>

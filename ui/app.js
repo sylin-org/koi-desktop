@@ -6,6 +6,9 @@
 const DAEMON_ORIGIN = "http://127.0.0.1:5641";
 
 const invoke = window.__TAURI__?.core?.invoke;
+// Browser mode: the same interface served by the daemon to LAN screens
+// (ADR-035 mobile access). Read-only — mutations stay in the desktop app.
+const BROWSER_MODE = !invoke;
 
 // ── debug sink: milestones + every failure path, to disk via Rust ────
 function dlog(message) {
@@ -97,21 +100,77 @@ function applyStatus(snap, svc) {
   el["card-version"].textContent = version !== "—" ? version.split(".").slice(0, 2).join(".") : "—";
 }
 
+if (BROWSER_MODE) {
+  document.body.classList.add("readonly");
+  const heading = document.getElementById("status-heading");
+  if (heading && !heading.querySelector(".readonly-badge")) {
+    const badge = document.createElement("span");
+    badge.className = "readonly-badge";
+    badge.textContent = "read-only view";
+    heading.appendChild(document.createTextNode(" "));
+    heading.appendChild(badge);
+  }
+  setInterval(refreshStatus, 5000);
+}
+
 async function refreshStatus() {
   let snap;
-  try {
-    snap = await invoke("daemon_status");
-  } catch (error) {
-    dlog(`daemon_status failed: ${error}`);
-    snap = { up: false, version: null, posture: null };
+  if (BROWSER_MODE) {
+    // Served by the daemon itself: same-origin GET, healthz decides "up".
+    try {
+      const health = await fetch("/healthz").then((r) => r.ok);
+      if (!health) throw new Error("daemon down");
+      snap = await fetch("/v1/status").then((r) => r.json());
+      snap.up = true;
+    } catch (error) {
+      dlog(`status poll failed: ${error}`);
+      snap = { up: false, version: null, posture: null };
+    }
+  } else {
+    try {
+      snap = await invoke("daemon_status");
+    } catch (error) {
+      dlog(`daemon_status failed: ${error}`);
+      snap = { up: false, version: null, posture: null };
+    }
   }
   let svc = { installed: false, running: false };
-  try { svc = await invoke("service_status"); } catch {}
+  if (!BROWSER_MODE) {
+    try { svc = await invoke("service_status"); } catch {}
+  }
   const signature = JSON.stringify([snap, svc]);
   if (signature === lastStatus) return;
   lastStatus = signature;
   applyStatus(snap, svc);
 }
+
+// ── Pond QR: publish the interface, then show the LAN URL as a QR ──
+const qrModal = document.getElementById("qr-modal");
+const qrNote = document.getElementById("qr-note");
+const qrSvg = document.getElementById("qr-svg");
+const qrUrl = document.getElementById("qr-url");
+
+function openQrModal() { qrModal.hidden = false; }
+function closeQrModal() { qrModal.hidden = true; }
+document.getElementById("qr-close")?.addEventListener("click", closeQrModal);
+qrModal?.addEventListener("click", (e) => { if (e.target === qrModal) closeQrModal(); });
+
+document.getElementById("btn-phone")?.addEventListener("click", async () => {
+  openQrModal();
+  qrNote.textContent = "Publishing this interface to the daemon…";
+  qrSvg.textContent = "";
+  qrUrl.textContent = "";
+  try {
+    await invoke("pond_publish_ui");
+    const url = await invoke("pond_qr_target");
+    const svg = await invoke("pond_qr_svg", { url });
+    qrSvg.innerHTML = svg;
+    qrUrl.textContent = url;
+    qrNote.textContent = "Scan to open this pond read-only on any screen on this network.";
+  } catch (error) {
+    qrNote.textContent = `QR failed: ${error}`;
+  }
+});
 
 // ── service actions ──────────────────────────────────────────────────
 async function act(name) {
@@ -419,9 +478,19 @@ function refreshTypeDropdown() {
   if (select.value !== current) { select.value = ""; typeFilter = ""; }
 }
 
+async function fetchDiscoverSnapshot() {
+  // Browser mode: same-origin GET served by the daemon (read-only LAN view).
+  if (BROWSER_MODE) {
+    const r = await fetch("/v1/mdns/browser/snapshot");
+    if (!r.ok) throw new Error("snapshot " + r.status);
+    return await r.json();
+  }
+  return await invoke("discover_snapshot");
+}
+
 async function seedSnapshot() {
   try {
-    const snap = await invoke("discover_snapshot");
+    const snap = await fetchDiscoverSnapshot();
     dlog(`snapshot ok: instances=${(snap.instances ?? []).length}`);
     for (const meta of snap.service_types ?? []) {
       if (meta.service_type) {
@@ -518,7 +587,7 @@ function updateDiscoverTiles() {
 
 async function seedSnapshot() {
   try {
-    const snap = await invoke("discover_snapshot");
+    const snap = await fetchDiscoverSnapshot();
     dlog(`snapshot ok: instances=${(snap.instances ?? []).length}`);
     for (const r of snap.instances ?? []) upsertInstance(r);
   } catch (error) {
@@ -778,7 +847,12 @@ async function dnsAct(noteEl, fn) {
 async function loadDns() {
   let entries = [];
   try {
-    const snap = await invoke("dns_entries");
+    const snap = BROWSER_MODE
+      ? await fetch("/v1/dns/entries").then((r) => {
+          if (!r.ok) throw new Error(String(r.status));
+          return r.json();
+        })
+      : await invoke("dns_entries");
     entries = snap.entries ?? [];
   } catch (error) {
     dnsNote(el2["dns-note"], String(error), true);
