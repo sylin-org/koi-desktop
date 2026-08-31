@@ -25,6 +25,7 @@ use tauri::{Emitter, Manager, RunEvent, WebviewWindowBuilder, WindowEvent};
 const MAIN_WINDOW: &str = "main";
 const DAEMON_ORIGIN: &str = "http://127.0.0.1:5641";
 const SERVICE_NAME: &str = "koi";
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// `--minimized`: login/autostart launches stay in the tray; the workbench
@@ -49,6 +50,7 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    configure_linux_webview();
     if std::env::args().any(|a| a == "--poke") {
         run_poke_and_exit();
     }
@@ -168,6 +170,23 @@ fn run() -> Result<()> {
 
     Ok(())
 }
+
+/// WebKitGTK's DMA-BUF renderer aborts at Wayland protocol setup on the
+/// NVIDIA+i915 Plasma stack used by the CachyOS reference machine (upstream
+/// wry#1366 / tauri#10702). Keep the native Wayland backend and disable only
+/// that renderer; an operator-provided value always wins.
+#[cfg(target_os = "linux")]
+fn configure_linux_webview() {
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|value| value == "wayland");
+    if wayland && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        eprintln!("Koi selected WebKitGTK's Wayland compatibility renderer");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_linux_webview() {}
 
 // ── daemon transport: Rust owns every network byte (the Ghostlight rule).
 // The webview never fetches cross-origin; WebView2's network stack eats
@@ -1279,6 +1298,7 @@ struct ServiceStatus {
     detail: Option<String>,
 }
 
+#[cfg(windows)]
 fn sc(args: &[&str]) -> std::io::Result<std::process::Output> {
     Command::new("sc")
         .args(args)
@@ -1316,12 +1336,59 @@ fn service_status() -> ServiceStatus {
     }
     #[cfg(not(windows))]
     {
+        #[cfg(target_os = "linux")]
+        {
+            linux_service_status()
+        }
+        #[cfg(not(target_os = "linux"))]
         ServiceStatus {
             installed: false,
             running: false,
-            detail: Some("unsupported platform".into()),
+            detail: Some("service controls are unavailable on this platform".into()),
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_service_status() -> ServiceStatus {
+    match Command::new("systemctl")
+        .args(["show", SERVICE_NAME, "--property=LoadState,ActiveState"])
+        .output()
+    {
+        Ok(output) => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let installed = text.lines().any(|line| line == "LoadState=loaded");
+            let running = text.lines().any(|line| line == "ActiveState=active");
+            ServiceStatus {
+                installed,
+                running,
+                detail: (!output.status.success())
+                    .then(|| String::from_utf8_lossy(&output.stderr).trim().to_owned()),
+            }
+        }
+        Err(error) => ServiceStatus {
+            installed: false,
+            running: false,
+            detail: Some(format!("systemctl query failed: {error}")),
+        },
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn systemctl_action(action: &str) -> Result<StartResult, String> {
+    let output = Command::new("systemctl")
+        .args([action, SERVICE_NAME])
+        .output()
+        .map_err(|e| format!("could not run systemctl: {e}"))?;
+    if output.status.success() {
+        return Ok(StartResult::ok(format!("Service {action} issued.")));
+    }
+    let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    Err(if detail.is_empty() {
+        format!("systemd refused to {action} Koi")
+    } else {
+        detail
+    })
 }
 
 #[tauri::command]
@@ -1354,7 +1421,12 @@ fn service_start() -> Result<StartResult, String> {
     }
     #[cfg(not(windows))]
     {
-        Err("unsupported platform".into())
+        #[cfg(target_os = "linux")]
+        {
+            systemctl_action("start")
+        }
+        #[cfg(not(target_os = "linux"))]
+        Err("service controls are unavailable on this platform".into())
     }
 }
 
@@ -1374,7 +1446,12 @@ fn service_stop() -> Result<StartResult, String> {
     }
     #[cfg(not(windows))]
     {
-        Err("unsupported platform".into())
+        #[cfg(target_os = "linux")]
+        {
+            systemctl_action("stop")
+        }
+        #[cfg(not(target_os = "linux"))]
+        Err("service controls are unavailable on this platform".into())
     }
 }
 
@@ -1393,17 +1470,30 @@ impl StartResult {
 
 #[tauri::command]
 fn daemon_run_once(state: tauri::State<'_, OnDemandDaemon>) -> Result<StartResult, String> {
+    if ureq::get(format!("{DAEMON_ORIGIN}/healthz").as_str())
+        .timeout(Duration::from_secs(2))
+        .call()
+        .is_ok()
+    {
+        return Err(
+            "Koi is already running on its standard endpoint; refusing to start a second instance."
+                .into(),
+        );
+    }
     let exe = locate_koi_exe().ok_or_else(|| {
         "koi.exe was not found on PATH or in its usual install locations. \
          Install Koi first (`winget`/archive), then try again."
             .to_string()
     })?;
-    let child = Command::new(&exe)
+    let mut command = Command::new(&exe);
+    command
         .arg("--daemon")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW | 0x0000_0008 /* DETACHED_PROCESS */)
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW | 0x0000_0008 /* DETACHED_PROCESS */);
+    let child = command
         .spawn()
         .map_err(|e| format!("could not launch {exe}: {e}"))?;
     *state.0.lock().unwrap_or_else(|p| p.into_inner()) = Some(child.id());

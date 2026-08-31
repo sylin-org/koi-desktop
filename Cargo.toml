@@ -20,5 +20,10 @@ base64 = "0.22"
 qrcode = "0.14"
 
 [build-dependencies]
-tauri-build = "=2.6.3"
+tauri-build = { version = "=2.6.3", features = [] }
 
+[patch.crates-io]
+# Tauri 2.11 still selects Tao 0.35.3, whose custom Wayland header diverges
+# from KDE's native decoration. Use Tao's merged upstream fix, as proven by
+# Ghostlight on the same CachyOS Plasma workstation, until Tauri selects 0.36+.
+tao = { git = "https://github.com/tauri-apps/tao", rev = "07f3742b1833b64be27b1ef991e38d557d4276c9" }
