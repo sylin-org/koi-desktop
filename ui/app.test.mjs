@@ -8,6 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadWorkbench, probe } from "./dom-stub.mjs";
 
@@ -25,6 +26,14 @@ async function boot() {
 }
 
 const settle = () => new Promise((r) => setImmediate(r));
+
+test("browser bundle: machine-local data root is neither disclosed nor shown", () => {
+  const html = readFileSync(new URL("index.html", import.meta.url), "utf8");
+  const css = readFileSync(new URL("styles.css", import.meta.url), "utf8");
+  assert.match(html, /id="data-root-tile"/);
+  assert.doesNotMatch(html, /%ProgramData%|\/var\/lib\/koi/);
+  assert.match(css, /body\.readonly #data-root-tile/);
+});
 
 test("status: data root is exact, optional, and never guessed", async () => {
   const { ctx, document } = await boot();
