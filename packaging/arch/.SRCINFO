@@ -1,6 +1,6 @@
 pkgbase = koi-desktop-git
 	pkgdesc = Koi's native network workbench
-	pkgver = 0.1.2.r0.g0000000
+	pkgver = 0.1.2.r43.gd2951f6
 	pkgrel = 1
 	url = https://github.com/sylin-org/koi-desktop
 	arch = x86_64

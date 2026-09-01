@@ -2,7 +2,7 @@
 
 pkgname=koi-desktop-git
 _pkgname=koi-desktop
-pkgver=0.1.2.r0.g0000000
+pkgver=0.1.2.r43.gd2951f6
 pkgrel=1
 pkgdesc="Koi's native network workbench"
 arch=('x86_64' 'aarch64')
@@ -19,8 +19,8 @@ pkgver() {
   cd "${_pkgname}"
   local release revisions commit
   release=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)
-  revisions=$(git rev-list --count HEAD)
-  commit=$(git rev-parse --short=7 HEAD)
+  revisions=$(git rev-list --count HEAD -- . ':(exclude)packaging/arch')
+  commit=$(git log -1 --format=%h -- . ':(exclude)packaging/arch')
   printf '%s.r%s.g%s' "${release}" "${revisions}" "${commit}"
 }
 
