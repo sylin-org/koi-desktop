@@ -2,7 +2,7 @@
 name = "koi-desktop"
 description = "Koi's desktop workbench: a friendly native shell over the local substrate"
 publish = false
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/sylin-org/koi-desktop"

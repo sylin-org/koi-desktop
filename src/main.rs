@@ -445,10 +445,12 @@ fn daemon_agent() -> ureq::Agent {
 #[tauri::command]
 fn daemon_status() -> Result<serde_json::Value, String> {
     let agent = daemon_agent();
-    let mut out = serde_json::json!({ "up": false, "version": null, "posture": null });
+    let mut out =
+        serde_json::json!({ "up": false, "version": null, "posture": null, "data_root": null });
     let Ok(access) = local_daemon::discover() else {
         return Ok(out);
     };
+    out["data_root"] = serde_json::json!(access.data_root.clone());
     if let Some(status) = get_local_json(&agent, &access, "/v1/status") {
         out["up"] = serde_json::Value::Bool(true);
         out["version"] = status["version"].clone();
@@ -1223,7 +1225,12 @@ fn fetch_status_value(
     agent: &ureq::Agent,
     access: &local_daemon::DaemonAccess,
 ) -> serde_json::Value {
-    let mut out = serde_json::json!({ "up": true, "version": null, "posture": null });
+    let mut out = serde_json::json!({
+        "up": true,
+        "version": null,
+        "posture": null,
+        "data_root": access.data_root.clone(),
+    });
     if let Some(status) = get_local_json(agent, access, "/v1/status") {
         out["version"] = status["version"].clone();
         if let Some(posture) = get_local_json(agent, access, "/v1/certmesh/posture") {
@@ -1241,7 +1248,12 @@ fn emit_down_status(app: &tauri::AppHandle) {
     if !healthz_ok {
         let _ = app.emit(
             "daemon-status",
-            serde_json::json!({ "up": false, "version": null, "posture": null }),
+            serde_json::json!({
+                "up": false,
+                "version": null,
+                "posture": null,
+                "data_root": null,
+            }),
         );
     }
 }

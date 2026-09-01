@@ -852,6 +852,7 @@ kbd { padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; col
 .modal-note { color: var(--dim, #8b8b94); font-size: 12px; margin: 10px 0 14px 0; }
 body.readonly .strip-actions,
 body.readonly #autostart-row,
+body.readonly #data-root-tile,
 body.readonly .dns-form,
 body.readonly .row-remove { display: none !important; }
 body.readonly .readonly-badge { display: inline-block; padding: 2px 10px;

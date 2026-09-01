@@ -41,7 +41,7 @@ for (const id of [
   "lamp", "state-word", "state-facts",
   "service-state", "service-detail", "btn-start", "btn-run-once", "btn-stop", "action-note",
   "autostart-toggle",
-  "t-http", "t-posture", "t-version",
+  "t-http", "t-posture", "t-version", "t-data-root",
   "t-stream", "t-types", "t-instances", "discover-queue", "discover-count",
   "koi-card", "card-version", "f-daemon", "f-posture", "f-host", "f-version",
 ]) el[id] = document.getElementById(id);
@@ -69,6 +69,9 @@ function applyStatus(snap, svc) {
   const up = snap.up === true;
   const level = snap.posture ? postureWord(snap.posture) : "—";
   const version = snap.version ? String(snap.version) : "—";
+  const dataRoot = typeof snap.data_root === "string" && snap.data_root.length > 0
+    ? snap.data_root
+    : null;
 
   // header lamp — Ghostlight drives states through body classes
   document.body.classList.toggle("runtime-offline", !up);
@@ -94,6 +97,11 @@ function applyStatus(snap, svc) {
   setFact(el["t-http"], up ? "serving at http://127.0.0.1:5641" : "no listener on 5641", up ? "ok" : "down");
   setFact(el["t-posture"], level, up ? "" : "down");
   setFact(el["t-version"], version);
+  setFact(
+    el["t-data-root"],
+    dataRoot ?? (up ? "not reported by this daemon" : "unavailable"),
+    up ? "" : "down",
+  );
 
   // about facts mirror
   setFact(el["f-daemon"], up ? "running" : "not running", up ? "ok" : "down");

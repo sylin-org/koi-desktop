@@ -17,6 +17,7 @@ const VERSION: u16 = 1;
 pub struct DaemonAccess {
     pub endpoint: String,
     pub token: String,
+    pub data_root: Option<String>,
 }
 
 impl DaemonAccess {
@@ -43,6 +44,8 @@ struct AccessResponse {
     version: u16,
     endpoint: String,
     token: String,
+    #[serde(default)]
+    data_root: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -84,7 +87,11 @@ fn read_breadcrumb(path: &Path) -> Option<DaemonAccess> {
     if endpoint.is_empty() || token.is_empty() {
         return None;
     }
-    Some(DaemonAccess { endpoint, token })
+    Some(DaemonAccess {
+        endpoint,
+        token,
+        data_root: None,
+    })
 }
 
 fn request_at(path: &Path, request: &str) -> Result<DaemonAccess, String> {
@@ -135,6 +142,7 @@ fn request_at(path: &Path, request: &str) -> Result<DaemonAccess, String> {
                 Ok(DaemonAccess {
                     endpoint: access.endpoint,
                     token: access.token,
+                    data_root: access.data_root,
                 })
             }
             Response::Access(_) => Err("local-control returned invalid credentials".to_string()),
@@ -202,8 +210,21 @@ mod tests {
         let access = DaemonAccess {
             endpoint: "http://127.0.0.1:5741".to_string(),
             token: "secret".to_string(),
+            data_root: None,
         };
         assert_eq!(access.port(), Some(5741));
         assert_eq!(access.url("/healthz"), "http://127.0.0.1:5741/healthz");
+    }
+
+    #[test]
+    fn legacy_local_control_response_has_no_invented_data_root() {
+        let response: Response = serde_json::from_str(
+            r#"{"response":"access","version":1,"endpoint":"http://127.0.0.1:5641","token":"secret"}"#,
+        )
+        .unwrap();
+        let Response::Access(access) = response else {
+            panic!("expected access response");
+        };
+        assert_eq!(access.data_root, None);
     }
 }

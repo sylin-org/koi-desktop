@@ -26,6 +26,31 @@ async function boot() {
 
 const settle = () => new Promise((r) => setImmediate(r));
 
+test("status: data root is exact, optional, and never guessed", async () => {
+  const { ctx, document } = await boot();
+  const root = "/srv/koi pond";
+  probe(ctx, `applyStatus(
+    {up:true, version:"1.0.0", posture:"open", data_root:${JSON.stringify(root)}},
+    {installed:true, running:true}
+  )`);
+  assert.equal(document.getElementById("t-data-root").textContent, root);
+
+  probe(ctx, `applyStatus(
+    {up:true, version:"1.0.0", posture:"open"},
+    {installed:true, running:true}
+  )`);
+  assert.equal(
+    document.getElementById("t-data-root").textContent,
+    "not reported by this daemon",
+  );
+
+  probe(ctx, `applyStatus(
+    {up:false, version:null, posture:null, data_root:null},
+    {installed:true, running:false}
+  )`);
+  assert.equal(document.getElementById("t-data-root").textContent, "unavailable");
+});
+
 test("sentences: every registry kind writes a sentence with tone and target", async () => {
   const { ctx } = await boot();
   const kinds = probe(ctx, "Object.keys(window.KoiSentences.REGISTRY)");
