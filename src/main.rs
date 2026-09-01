@@ -8,6 +8,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod local_daemon;
+
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,7 +25,6 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager, RunEvent, WebviewWindowBuilder, WindowEvent};
 
 const MAIN_WINDOW: &str = "main";
-const DAEMON_ORIGIN: &str = "http://127.0.0.1:5641";
 const SERVICE_NAME: &str = "koi";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -194,11 +195,18 @@ fn configure_linux_webview() {}
 // The webview never fetches cross-origin; WebView2's network stack eats
 // loopback requests unpredictably, so the shell proxies the loopback API.
 
-/// GET a daemon URL and parse the JSON body, or None on any failure — the
-/// flattened form of the call/into_string/from_str chain, sized for clippy
-/// and honest about "any failure is just: no data".
-fn get_json(agent: &ureq::Agent, url: String) -> Option<serde_json::Value> {
-    let text = agent.get(&url).call().ok()?.into_string().ok()?;
+fn get_local_json(
+    agent: &ureq::Agent,
+    access: &local_daemon::DaemonAccess,
+    path: &str,
+) -> Option<serde_json::Value> {
+    let text = agent
+        .get(&access.url(path))
+        .set("x-koi-token", &access.token)
+        .call()
+        .ok()?
+        .into_string()
+        .ok()?;
     serde_json::from_str(&text).ok()
 }
 
@@ -397,6 +405,10 @@ fn pond_publish_ui() -> Result<serde_json::Value, String> {
 /// network (routing-table lookup; no packet leaves the machine).
 #[tauri::command]
 fn pond_qr_target() -> Result<String, String> {
+    let daemon = local_daemon::discover()?;
+    let port = daemon
+        .port()
+        .ok_or_else(|| "the daemon advertised an endpoint without a port".to_string())?;
     let sock =
         std::net::UdpSocket::bind(("127.0.0.1", 0)).map_err(|e| format!("no local socket: {e}"))?;
     sock.connect("192.168.1.1:80")
@@ -405,7 +417,7 @@ fn pond_qr_target() -> Result<String, String> {
     let ip = sock
         .local_addr()
         .map_err(|e| format!("no local addr: {e}"))?;
-    Ok(format!("http://{}:5641/", ip.ip()))
+    Ok(format!("http://{}:{port}/", ip.ip()))
 }
 
 /// Render a QR code for `url` as a compact dark-theme SVG string.
@@ -434,10 +446,13 @@ fn daemon_agent() -> ureq::Agent {
 fn daemon_status() -> Result<serde_json::Value, String> {
     let agent = daemon_agent();
     let mut out = serde_json::json!({ "up": false, "version": null, "posture": null });
-    if let Some(status) = get_json(&agent, format!("{DAEMON_ORIGIN}/v1/status")) {
+    let Ok(access) = local_daemon::discover() else {
+        return Ok(out);
+    };
+    if let Some(status) = get_local_json(&agent, &access, "/v1/status") {
         out["up"] = serde_json::Value::Bool(true);
         out["version"] = status["version"].clone();
-        if let Some(posture) = get_json(&agent, format!("{DAEMON_ORIGIN}/v1/certmesh/posture")) {
+        if let Some(posture) = get_local_json(&agent, &access, "/v1/certmesh/posture") {
             out["posture"] = posture["level"].clone();
         }
     }
@@ -448,20 +463,13 @@ fn daemon_status() -> Result<serde_json::Value, String> {
 /// ladder with the daemon's own words (skip reasons are data, not log lines).
 #[tauri::command]
 fn daemon_status_full() -> Result<serde_json::Value, String> {
-    get_json(&daemon_agent(), format!("{DAEMON_ORIGIN}/v1/status"))
-        .ok_or_else(|| "no daemon — the ladder is unknown, not healthy".to_string())
+    daemon_json("GET", "/v1/status", None)
+        .map_err(|_| "no daemon — the ladder is unknown, not healthy".to_string())
 }
 
 #[tauri::command]
 fn discover_snapshot() -> Result<serde_json::Value, String> {
-    let response = daemon_agent()
-        .get(format!("{DAEMON_ORIGIN}/v1/mdns/browser/snapshot").as_str())
-        .call()
-        .map_err(|e| format!("snapshot unavailable: {e}"))?;
-    let body = response
-        .into_string()
-        .map_err(|e| format!("snapshot unreadable: {e}"))?;
-    serde_json::from_str(&body).map_err(|e| format!("snapshot malformed: {e}"))
+    daemon_json("GET", "/v1/mdns/browser/snapshot", None)
 }
 
 /// "Ping the pond": force the daemon's mDNS query burst so every client on the
@@ -469,19 +477,11 @@ fn discover_snapshot() -> Result<serde_json::Value, String> {
 /// carries the token, exactly like the CLI.
 #[tauri::command]
 fn discover_ping() -> Result<serde_json::Value, String> {
-    let (_, token) = read_breadcrumb().ok_or("no daemon breadcrumb found — is Koi running?")?;
-    let mut request =
-        daemon_agent().post(format!("{DAEMON_ORIGIN}/v1/mdns/browser/query").as_str());
-    if let Some(token) = &token {
-        request = request.set("x-koi-token", token);
-    }
-    let response = request
-        .send_json(serde_json::json!({}))
-        .map_err(|e| format!("query burst failed: {e}"))?;
-    let body = response
-        .into_string()
-        .map_err(|e| format!("query response unreadable: {e}"))?;
-    serde_json::from_str(&body).map_err(|e| format!("query response malformed: {e}"))
+    daemon_json(
+        "POST",
+        "/v1/mdns/browser/query",
+        Some(serde_json::json!({})),
+    )
 }
 
 /// Authenticated daemon request: breadcrumb token attached, JSON body in/out.
@@ -491,17 +491,15 @@ fn daemon_json(
     path: &str,
     body: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    let (endpoint, token) =
-        read_breadcrumb().ok_or("no daemon breadcrumb found — is Koi running?")?;
+    let access = local_daemon::discover()
+        .map_err(|error| format!("no local Koi daemon access — {error}"))?;
     let mut request = match method {
-        "POST" => daemon_agent().post(format!("{endpoint}{path}").as_str()),
-        "PUT" => daemon_agent().put(format!("{endpoint}{path}").as_str()),
-        "DELETE" => daemon_agent().delete(format!("{endpoint}{path}").as_str()),
-        _ => daemon_agent().get(format!("{endpoint}{path}").as_str()),
+        "POST" => daemon_agent().post(access.url(path).as_str()),
+        "PUT" => daemon_agent().put(access.url(path).as_str()),
+        "DELETE" => daemon_agent().delete(access.url(path).as_str()),
+        _ => daemon_agent().get(access.url(path).as_str()),
     };
-    if let Some(token) = &token {
-        request = request.set("x-koi-token", token);
-    }
+    request = request.set("x-koi-token", &access.token);
     let response = match body {
         Some(body) => request
             .send_json(body)
@@ -1221,36 +1219,14 @@ fn emit_stream_state(app: &tauri::AppHandle, state: &str) {
     let _ = app.emit("discover-stream", serde_json::json!(state));
 }
 
-/// Breadcrumb: the daemon's two-line discovery file (endpoint + DAT). The
-/// workbench reads it exactly like the CLI does.
-fn read_breadcrumb() -> Option<(String, Option<String>)> {
-    #[cfg(windows)]
-    let path = {
-        let program_data =
-            std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into());
-        std::path::PathBuf::from(program_data)
-            .join("koi")
-            .join("koi.endpoint")
-    };
-    #[cfg(not(windows))]
-    let path = std::path::PathBuf::from("/var/run/koi.endpoint");
-    let body = std::fs::read_to_string(path).ok()?;
-    let mut lines = body.lines();
-    let endpoint = lines.next()?.trim().to_owned();
-    if endpoint.is_empty() {
-        return None;
-    }
-    let token = lines
-        .next()
-        .and_then(|l| l.trim().strip_prefix("dat:").map(str::to_owned));
-    Some((endpoint, token))
-}
-
-fn fetch_status_value(agent: &ureq::Agent, endpoint: &str) -> serde_json::Value {
+fn fetch_status_value(
+    agent: &ureq::Agent,
+    access: &local_daemon::DaemonAccess,
+) -> serde_json::Value {
     let mut out = serde_json::json!({ "up": true, "version": null, "posture": null });
-    if let Some(status) = get_json(agent, format!("{endpoint}/v1/status")) {
+    if let Some(status) = get_local_json(agent, access, "/v1/status") {
         out["version"] = status["version"].clone();
-        if let Some(posture) = get_json(agent, format!("{endpoint}/v1/certmesh/posture")) {
+        if let Some(posture) = get_local_json(agent, access, "/v1/certmesh/posture") {
             out["posture"] = posture["level"].clone();
         }
     }
@@ -1260,10 +1236,8 @@ fn fetch_status_value(agent: &ureq::Agent, endpoint: &str) -> serde_json::Value 
 fn emit_down_status(app: &tauri::AppHandle) {
     // "Down" means the daemon is truly absent — healthz fails too. A daemon
     // that merely lacks /v1/events (older builds) is still up.
-    let healthz_ok = daemon_agent()
-        .get(format!("{DAEMON_ORIGIN}/healthz").as_str())
-        .call()
-        .is_ok();
+    let healthz_ok = local_daemon::discover()
+        .is_ok_and(|access| daemon_agent().get(&access.url("/healthz")).call().is_ok());
     if !healthz_ok {
         let _ = app.emit(
             "daemon-status",
@@ -1285,18 +1259,17 @@ fn status_events_start(app: tauri::AppHandle) -> Result<(), String> {
     std::thread::spawn(move || {
         let agent = daemon_agent();
         loop {
-            let Some((endpoint, token)) = read_breadcrumb() else {
+            let Ok(access) = local_daemon::discover() else {
                 emit_down_status(&app);
                 std::thread::sleep(Duration::from_secs(3));
                 continue;
             };
-            let mut request = agent.get(format!("{endpoint}/v1/events").as_str());
-            if let Some(token) = &token {
-                request = request.set("x-koi-token", token);
-            }
+            let request = agent
+                .get(&access.url("/v1/events"))
+                .set("x-koi-token", &access.token);
             match request.call() {
                 Ok(response) => {
-                    let _ = app.emit("daemon-status", fetch_status_value(&agent, &endpoint));
+                    let _ = app.emit("daemon-status", fetch_status_value(&agent, &access));
                     let mut reader = std::io::BufReader::new(response.into_reader());
                     let mut kind = String::new();
                     let mut data = String::new();
@@ -1314,8 +1287,8 @@ fn status_events_start(app: tauri::AppHandle) -> Result<(), String> {
                             data.push_str(d.trim());
                         } else if line.is_empty() {
                             if kind == "heartbeat" {
-                                let _ = app
-                                    .emit("daemon-status", fetch_status_value(&agent, &endpoint));
+                                let _ =
+                                    app.emit("daemon-status", fetch_status_value(&agent, &access));
                             } else if !kind.is_empty() {
                                 let parsed: Option<serde_json::Value> = if data.is_empty() {
                                     None
@@ -1351,10 +1324,14 @@ fn discover_start(app: tauri::AppHandle) -> Result<(), String> {
     std::thread::spawn(move || {
         let agent = daemon_agent();
         loop {
-            match agent
-                .get(format!("{DAEMON_ORIGIN}/v1/mdns/browser/events").as_str())
-                .call()
-            {
+            let response = local_daemon::discover().and_then(|access| {
+                agent
+                    .get(&access.url("/v1/mdns/browser/events"))
+                    .set("x-koi-token", &access.token)
+                    .call()
+                    .map_err(|error| error.to_string())
+            });
+            match response {
                 Ok(response) => {
                     emit_stream_state(&app, "live");
                     let mut reader = std::io::BufReader::new(response.into_reader());
@@ -1617,14 +1594,24 @@ impl StartResult {
 
 #[tauri::command]
 fn daemon_run_once(state: tauri::State<'_, OnDemandDaemon>) -> Result<StartResult, String> {
-    if ureq::get(format!("{DAEMON_ORIGIN}/healthz").as_str())
-        .timeout(Duration::from_secs(2))
-        .call()
-        .is_ok()
-    {
+    let installed = service_status();
+    if installed.installed {
+        return Err(if installed.running {
+            "Koi is already running as the installed service; refusing to start a second instance."
+                .into()
+        } else {
+            "Koi is installed as a service; start that service instead of creating a parallel instance."
+                .into()
+        });
+    }
+    // A successful hand-off is itself proof of a live daemon even when its HTTP
+    // adapter is disabled or still reconciling. A private breadcrumb may be a
+    // crash artifact, but treating it as an ownership collision is safer than
+    // racing a replacement process; the operator can repair the one real
+    // deployment explicitly.
+    if local_daemon::discover().is_ok() {
         return Err(
-            "Koi is already running on its standard endpoint; refusing to start a second instance."
-                .into(),
+            "Koi is already running on this machine; refusing to start a second instance.".into(),
         );
     }
     let exe = locate_koi_exe().ok_or_else(|| {
@@ -1770,7 +1757,9 @@ fn start_posture_polling(_app: tauri::AppHandle, status_item: MenuItem<tauri::Wr
 }
 
 fn posture_level() -> Option<String> {
-    let body = ureq::get(format!("{DAEMON_ORIGIN}/v1/certmesh/posture").as_str())
+    let access = local_daemon::discover().ok()?;
+    let body = ureq::get(&access.url("/v1/certmesh/posture"))
+        .set("x-koi-token", &access.token)
         .timeout(Duration::from_secs(3))
         .call()
         .ok()?
