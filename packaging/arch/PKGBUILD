@@ -12,6 +12,7 @@ depends=('gtk3' 'libayatana-appindicator' 'webkit2gtk-4.1')
 makedepends=('cargo' 'git')
 provides=('koi-desktop')
 conflicts=('koi-desktop')
+options=('!lto')
 source=("${_pkgname}::git+${url}.git")
 sha256sums=('SKIP')
 

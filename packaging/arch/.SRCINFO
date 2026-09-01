@@ -14,6 +14,7 @@ pkgbase = koi-desktop-git
 	depends = webkit2gtk-4.1
 	provides = koi-desktop
 	conflicts = koi-desktop
+	options = !lto
 	source = koi-desktop::git+https://github.com/sylin-org/koi-desktop.git
 	sha256sums = SKIP
 
