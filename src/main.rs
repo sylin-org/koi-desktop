@@ -104,6 +104,8 @@ fn run() -> Result<()> {
                 probe_http,
                 open_url,
                 notify,
+                autostart_state,
+                autostart_set,
                 daemon_status_full,
                 status_events_start,
                 debug_log
@@ -866,6 +868,151 @@ fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), Stri
         .body(body)
         .show()
         .map_err(|e| format!("notification refused: {e}"))
+}
+
+#[derive(Serialize)]
+struct AutostartState {
+    handled: bool,
+    enabled: bool,
+    detail: String,
+}
+
+const HYPR_AUTOSTART_BEGIN: &str = "-- BEGIN Koi desktop autostart (managed by Koi)";
+const HYPR_AUTOSTART_END: &str = "-- END Koi desktop autostart (managed by Koi)";
+
+/// Omarchy/Hyprland does not consume XDG autostart entries. Report whether
+/// this session needs Koi's compositor-native startup adapter; every other
+/// desktop continues through tauri-plugin-autostart.
+#[tauri::command]
+fn autostart_state() -> Result<AutostartState, String> {
+    let Some(path) = hyprland_autostart_path() else {
+        return Ok(AutostartState {
+            handled: false,
+            enabled: false,
+            detail: "the desktop uses its native autostart provider".into(),
+        });
+    };
+    let source = std::fs::read_to_string(&path)
+        .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+    let enabled = managed_autostart_range(&source)?.is_some();
+    Ok(AutostartState {
+        handled: true,
+        enabled,
+        detail: format!("managed through {}", path.display()),
+    })
+}
+
+/// Add or remove only Koi's marked block. The surrounding Hyprland config is
+/// operator-owned and is preserved byte-for-byte.
+#[tauri::command]
+fn autostart_set(enabled: bool) -> Result<AutostartState, String> {
+    let Some(path) = hyprland_autostart_path() else {
+        return Ok(AutostartState {
+            handled: false,
+            enabled: false,
+            detail: "the desktop uses its native autostart provider".into(),
+        });
+    };
+    let source = std::fs::read_to_string(&path)
+        .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+    let executable = std::env::current_exe()
+        .map_err(|e| format!("could not locate the Koi workbench executable: {e}"))?;
+    if enabled && is_checkout_binary(&executable) {
+        return Err(
+            "install Koi Desktop to a durable location before enabling login startup; source-checkout build paths are not retained"
+                .into(),
+        );
+    }
+    let updated = render_hyprland_autostart(&source, enabled, &executable)?;
+    if updated != source {
+        let temporary = path.with_extension(format!("lua.koi-tmp-{}", std::process::id()));
+        std::fs::write(&temporary, updated)
+            .map_err(|e| format!("could not write {}: {e}", temporary.display()))?;
+        let permissions = std::fs::metadata(&path)
+            .map_err(|e| format!("could not inspect {}: {e}", path.display()))?
+            .permissions();
+        std::fs::set_permissions(&temporary, permissions)
+            .map_err(|e| format!("could not preserve permissions on {}: {e}", path.display()))?;
+        std::fs::rename(&temporary, &path)
+            .map_err(|e| format!("could not replace {}: {e}", path.display()))?;
+    }
+    Ok(AutostartState {
+        handled: true,
+        enabled,
+        detail: format!("managed through {}", path.display()),
+    })
+}
+
+fn is_checkout_binary(executable: &std::path::Path) -> bool {
+    executable.ancestors().any(|ancestor| {
+        ancestor.file_name().is_some_and(|name| name == "target")
+            && ancestor
+                .parent()
+                .is_some_and(|parent| parent.join("Cargo.toml").is_file())
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn hyprland_autostart_path() -> Option<std::path::PathBuf> {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    if !desktop.to_ascii_lowercase().contains("hyprland") {
+        return None;
+    }
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+        })?;
+    let path = config.join("hypr/autostart.lua");
+    path.is_file().then_some(path)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn hyprland_autostart_path() -> Option<std::path::PathBuf> {
+    None
+}
+
+fn managed_autostart_range(source: &str) -> Result<Option<std::ops::Range<usize>>, String> {
+    match (source.find(HYPR_AUTOSTART_BEGIN), source.find(HYPR_AUTOSTART_END)) {
+        (None, None) => Ok(None),
+        (Some(begin), Some(end)) if begin < end => {
+            let mut finish = end + HYPR_AUTOSTART_END.len();
+            if source.as_bytes().get(finish) == Some(&b'\n') {
+                finish += 1;
+            }
+            Ok(Some(begin..finish))
+        }
+        _ => Err("Koi's managed Hyprland autostart block is incomplete; repair it manually before changing this setting".into()),
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\\"'\\\"'"))
+}
+
+fn render_hyprland_autostart(
+    source: &str,
+    enabled: bool,
+    executable: &std::path::Path,
+) -> Result<String, String> {
+    let mut rendered = source.to_owned();
+    if let Some(range) = managed_autostart_range(&rendered)? {
+        rendered.replace_range(range, "");
+    }
+    if enabled {
+        if !rendered.is_empty() && !rendered.ends_with('\n') {
+            rendered.push('\n');
+        }
+        let command = format!("{} --minimized", shell_quote(&executable.to_string_lossy()));
+        let lua_command = serde_json::to_string(&command)
+            .map_err(|e| format!("could not encode the autostart command: {e}"))?;
+        rendered.push_str(HYPR_AUTOSTART_BEGIN);
+        rendered.push('\n');
+        rendered.push_str(&format!("o.launch_on_start({lua_command})\n"));
+        rendered.push_str(HYPR_AUTOSTART_END);
+        rendered.push('\n');
+    }
+    Ok(rendered)
 }
 
 /// Passage liveness probe (operator direction): an Open button is only shown
@@ -1705,6 +1852,52 @@ mod cycle1_guards {
         let traversal = ["/x", "..", "y"].join("/");
         assert!(traversal.contains(".."));
         assert!(super::validate_daemon_get("192.168.1.44", 16541, &traversal).is_err());
+    }
+
+    #[test]
+    fn hyprland_autostart_preserves_user_config_and_round_trips() {
+        let original = "-- Extra autostart processes.\no.launch_on_start(\"keep-me\")\n";
+        let executable = std::path::Path::new("/opt/Koi pond/koi-desktop");
+        let enabled = super::render_hyprland_autostart(original, true, executable)
+            .expect("managed block should render");
+        assert!(enabled.starts_with(original));
+        assert!(enabled.contains(super::HYPR_AUTOSTART_BEGIN));
+        assert!(enabled.contains("'/opt/Koi pond/koi-desktop' --minimized"));
+        assert_eq!(
+            super::render_hyprland_autostart(&enabled, false, executable)
+                .expect("managed block should be removable"),
+            original
+        );
+    }
+
+    #[test]
+    fn hyprland_autostart_replaces_stale_installed_path() {
+        let old = super::render_hyprland_autostart(
+            "-- mine\n",
+            true,
+            std::path::Path::new("/old/koi-desktop"),
+        )
+        .expect("old block should render");
+        let updated =
+            super::render_hyprland_autostart(&old, true, std::path::Path::new("/new/koi-desktop"))
+                .expect("old block should be replaced");
+        assert!(!updated.contains("/old/koi-desktop"));
+        assert!(updated.contains("/new/koi-desktop"));
+        assert_eq!(updated.matches(super::HYPR_AUTOSTART_BEGIN).count(), 1);
+    }
+
+    #[test]
+    fn hyprland_autostart_refuses_a_partial_managed_block() {
+        let broken = format!(
+            "{}\no.launch_on_start(\"koi\")\n",
+            super::HYPR_AUTOSTART_BEGIN
+        );
+        assert!(super::render_hyprland_autostart(
+            &broken,
+            false,
+            std::path::Path::new("/usr/bin/koi-desktop"),
+        )
+        .is_err());
     }
 
     /// Live acceptance (WP0): a sibling daemon's browse snapshot is reachable

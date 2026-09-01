@@ -198,11 +198,26 @@ el["btn-run-once"]?.addEventListener("click", () => act("daemon_run_once"));
 // The plugin degrades honestly: if the platform refuses (unsupported session,
 // policy), the toggle reports the failure instead of pretending.
 const autostartApi = window.__TAURI__?.autostart;
+let nativeAutostart = null;
+async function autostartState() {
+  if (invoke) {
+    try {
+      const state = await invoke("autostart_state");
+      if (state?.handled) { nativeAutostart = state; return state; }
+    } catch (error) {
+      dlog(`native autostart state failed: ${error}`);
+    }
+  }
+  nativeAutostart = null;
+  if (!autostartApi?.isEnabled) throw new Error("no desktop autostart provider is available");
+  return { handled: false, enabled: await autostartApi.isEnabled() };
+}
 async function refreshAutostart() {
   const toggle = el["autostart-toggle"];
-  if (!toggle || !autostartApi?.isEnabled) return;
+  if (!toggle) return;
   try {
-    toggle.checked = await autostartApi.isEnabled();
+    toggle.checked = (await autostartState()).enabled;
+    toggle.disabled = false;
   } catch (error) {
     dlog(`autostart isEnabled failed: ${error}`);
     toggle.disabled = true;
@@ -210,10 +225,15 @@ async function refreshAutostart() {
   }
 }
 el["autostart-toggle"]?.addEventListener("change", async (event) => {
-  if (!autostartApi) return;
   const want = event.target.checked;
   try {
-    if (want) { await autostartApi.enable(); } else { await autostartApi.disable(); }
+    if (nativeAutostart?.handled) {
+      await invoke("autostart_set", { enabled: want });
+    } else if (want) {
+      await autostartApi.enable();
+    } else {
+      await autostartApi.disable();
+    }
     note(want
       ? "Koi will start (minimized to the tray) when you log in."
       : "Koi will no longer start at login.");
