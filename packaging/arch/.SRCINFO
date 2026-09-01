@@ -1,0 +1,20 @@
+pkgbase = koi-desktop-git
+	pkgdesc = Koi's native network workbench
+	pkgver = 0.1.2.r0.g0000000
+	pkgrel = 1
+	url = https://github.com/sylin-org/koi-desktop
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	license = Apache-2.0
+	makedepends = cargo
+	makedepends = git
+	depends = gtk3
+	depends = libayatana-appindicator
+	depends = webkit2gtk-4.1
+	provides = koi-desktop
+	conflicts = koi-desktop
+	source = koi-desktop::git+https://github.com/sylin-org/koi-desktop.git
+	sha256sums = SKIP
+
+pkgname = koi-desktop-git

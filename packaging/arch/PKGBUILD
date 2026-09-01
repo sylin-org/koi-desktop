@@ -1,0 +1,45 @@
+# Maintainer: Sylin <hello@sylin.org>
+
+pkgname=koi-desktop-git
+_pkgname=koi-desktop
+pkgver=0.1.2.r0.g0000000
+pkgrel=1
+pkgdesc="Koi's native network workbench"
+arch=('x86_64' 'aarch64')
+url="https://github.com/sylin-org/koi-desktop"
+license=('MIT' 'Apache-2.0')
+depends=('gtk3' 'libayatana-appindicator' 'webkit2gtk-4.1')
+makedepends=('cargo' 'git')
+provides=('koi-desktop')
+conflicts=('koi-desktop')
+source=("${_pkgname}::git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${_pkgname}"
+  local release revisions commit
+  release=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)
+  revisions=$(git rev-list --count HEAD)
+  commit=$(git rev-parse --short=7 HEAD)
+  printf '%s.r%s.g%s' "${release}" "${revisions}" "${commit}"
+}
+
+build() {
+  cd "${_pkgname}"
+  CARGO_TARGET_DIR="${srcdir}/target" cargo build --locked --release
+}
+
+check() {
+  cd "${_pkgname}"
+  CARGO_TARGET_DIR="${srcdir}/target" cargo test --locked
+}
+
+package() {
+  cd "${_pkgname}"
+  install -Dm755 "${srcdir}/target/release/koi-desktop" \
+    "${pkgdir}/usr/bin/koi-desktop"
+  install -Dm644 packaging/arch/koi-desktop.desktop \
+    "${pkgdir}/usr/share/applications/koi-desktop.desktop"
+  install -Dm644 icons/koi.png "${pkgdir}/usr/share/pixmaps/koi.png"
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/koi-desktop/README.md"
+}

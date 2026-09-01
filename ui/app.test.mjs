@@ -35,6 +35,18 @@ test("browser bundle: machine-local data root is neither disclosed nor shown", (
   assert.match(css, /body\.readonly #data-root-tile/);
 });
 
+test("phone: URL comes from the daemon and sharing has an explicit stop", () => {
+  const app = readFileSync(new URL("app.js", import.meta.url), "utf8");
+  const html = readFileSync(new URL("index.html", import.meta.url), "utf8");
+  const rust = readFileSync(new URL("../src/main.rs", import.meta.url), "utf8");
+  assert.match(app, /const url = status\?\.url/);
+  assert.match(app, /invoke\("pond_disable"\)/);
+  assert.match(html, /id="qr-stop"/);
+  assert.match(rust, /daemon_json\("PUT", "\/v1\/pond", None\)/);
+  assert.match(rust, /daemon_json\("DELETE", "\/v1\/pond", None\)/);
+  assert.doesNotMatch(rust, /pond_qr_target|192\.168\.1\.1:80/);
+});
+
 test("status: data root is exact, optional, and never guessed", async () => {
   const { ctx, document } = await boot();
   const root = "/srv/koi pond";

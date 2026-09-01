@@ -77,7 +77,7 @@ function applyStatus(snap, svc) {
   document.body.classList.toggle("runtime-offline", !up);
   el["state-word"].textContent = up ? "Calm" : "No service";
   el["state-facts"].textContent = up
-    ? "http 127.0.0.1:5641 · posture " + level
+    ? (BROWSER_MODE ? "read-only Pond view · Koi is serving" : "local control · posture " + level)
     : "the koi service is not running on this machine";
 
   // service strip
@@ -94,7 +94,10 @@ function applyStatus(snap, svc) {
   el["btn-run-once"].disabled = false;
 
   // diagnostic tiles
-  setFact(el["t-http"], up ? "serving at http://127.0.0.1:5641" : "no listener on 5641", up ? "ok" : "down");
+  const visibleEndpoint = BROWSER_MODE
+    ? (window.location?.origin || "this Pond listener")
+    : "the local operator endpoint";
+  setFact(el["t-http"], up ? `serving at ${visibleEndpoint}` : "no listener", up ? "ok" : "down");
   setFact(el["t-posture"], level, up ? "" : "down");
   setFact(el["t-version"], version);
   setFact(
@@ -146,7 +149,9 @@ async function refreshStatus() {
     }
   }
   let svc = { installed: false, running: false };
-  if (!BROWSER_MODE) {
+  if (BROWSER_MODE) {
+    svc = { installed: snap.up === true, running: snap.up === true };
+  } else {
     try { svc = await invoke("service_status"); } catch {}
   }
   const signature = JSON.stringify([snap, svc]);
@@ -160,6 +165,7 @@ const qrModal = document.getElementById("qr-modal");
 const qrNote = document.getElementById("qr-note");
 const qrSvg = document.getElementById("qr-svg");
 const qrUrl = document.getElementById("qr-url");
+const qrStop = document.getElementById("qr-stop");
 
 function openQrModal() { qrModal.hidden = false; }
 function closeQrModal() { qrModal.hidden = true; }
@@ -168,18 +174,34 @@ qrModal?.addEventListener("click", (e) => { if (e.target === qrModal) closeQrMod
 
 document.getElementById("btn-phone")?.addEventListener("click", async () => {
   openQrModal();
+  qrStop.disabled = false;
   qrNote.textContent = "Publishing this interface to the daemon…";
   qrSvg.textContent = "";
   qrUrl.textContent = "";
   try {
-    await invoke("pond_publish_ui");
-    const url = await invoke("pond_qr_target");
+    const status = await invoke("pond_publish_ui");
+    const url = status?.url;
+    if (!url) throw new Error(status?.reason || "Pond did not report a reachable LAN URL");
     const svg = await invoke("pond_qr_svg", { url });
     qrSvg.innerHTML = svg;
     qrUrl.textContent = url;
     qrNote.textContent = "Scan to open this view read-only on any screen on this network.";
   } catch (error) {
     qrNote.textContent = `QR failed: ${error}`;
+  }
+});
+
+qrStop?.addEventListener("click", async () => {
+  qrStop.disabled = true;
+  qrNote.textContent = "Stopping phone sharing…";
+  try {
+    await invoke("pond_disable");
+    qrSvg.textContent = "";
+    qrUrl.textContent = "";
+    qrNote.textContent = "Phone sharing is stopped.";
+  } catch (error) {
+    qrStop.disabled = false;
+    qrNote.textContent = `Could not stop sharing: ${error}`;
   }
 });
 

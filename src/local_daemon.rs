@@ -25,6 +25,7 @@ impl DaemonAccess {
         format!("{}{}", self.endpoint.trim_end_matches('/'), path)
     }
 
+    #[cfg(test)]
     pub fn port(&self) -> Option<u16> {
         self.endpoint
             .trim_end_matches('/')

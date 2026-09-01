@@ -79,8 +79,8 @@ fn run() -> Result<()> {
                 daemon_run_once,
                 daemon_get,
                 pond_publish_ui,
+                pond_disable,
                 pond_qr_svg,
-                pond_qr_target,
                 daemon_status,
                 discover_start,
                 discover_snapshot,
@@ -370,9 +370,9 @@ Connection: close
     }
     std::process::exit(0);
 }
-/// Publish the workbench's own interface to the daemon (cycle-1 WP-qr): the
-/// five UI files ride a DAT-authenticated PUT; the daemon then serves them at
-/// its LAN address so any browser on the network opens the same pond.
+/// Publish the workbench's fixed browser bundle, then express the operator's
+/// desire for Pond to run. The daemon owns interface choice, socket binding,
+/// firewall assessment, retry, and the exact URL returned to this view.
 #[tauri::command]
 fn pond_publish_ui() -> Result<serde_json::Value, String> {
     let files = [
@@ -398,26 +398,13 @@ fn pond_publish_ui() -> Result<serde_json::Value, String> {
         "PUT",
         "/v1/ui",
         Some(serde_json::json!({ "files": entries })),
-    )
+    )?;
+    daemon_json("PUT", "/v1/pond", None)
 }
 
-/// The LAN URL a phone should open: the daemon's address as seen from the
-/// network (routing-table lookup; no packet leaves the machine).
 #[tauri::command]
-fn pond_qr_target() -> Result<String, String> {
-    let daemon = local_daemon::discover()?;
-    let port = daemon
-        .port()
-        .ok_or_else(|| "the daemon advertised an endpoint without a port".to_string())?;
-    let sock =
-        std::net::UdpSocket::bind(("127.0.0.1", 0)).map_err(|e| format!("no local socket: {e}"))?;
-    sock.connect("192.168.1.1:80")
-        .or_else(|_| sock.connect("8.8.8.8:80"))
-        .map_err(|e| format!("no route: {e}"))?;
-    let ip = sock
-        .local_addr()
-        .map_err(|e| format!("no local addr: {e}"))?;
-    Ok(format!("http://{}:{port}/", ip.ip()))
+fn pond_disable() -> Result<serde_json::Value, String> {
+    daemon_json("DELETE", "/v1/pond", None)
 }
 
 /// Render a QR code for `url` as a compact dark-theme SVG string.

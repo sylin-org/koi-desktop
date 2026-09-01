@@ -24,9 +24,10 @@ workbench are three doors into the same pond.
 
 The workbench is functional on Windows and glibc Linux: singleton lifecycle,
 tray reveal, login startup, live status/events, discovery/browser/diff, DNS,
-trust, capability glass, and read-only Pond publishing. Version 0.1.1 renders
-the data root reported by the authenticated local daemon instead of assuming an
-OS path.
+trust, capability glass, and read-only Pond publishing. Version 0.1.2 asks the
+daemon to arm its narrow LAN adapter and renders only the URL backed by the
+daemon's real socket and host-policy assessment; the full operator API remains
+local.
 
 ## Development
 
@@ -41,6 +42,23 @@ cargo clippy --locked --all-targets -- -D warnings
 Linux needs webkit2gtk; Windows needs nothing extra.
 
 ## Linux packages
+
+### Arch Linux and derivatives
+
+The VCS package installs the workbench at `/usr/bin/koi-desktop`, plus its
+desktop entry and icon. From a checkout:
+
+```sh
+cd packaging/arch
+makepkg -si
+```
+
+The manifest uses Arch's current `webkit2gtk-4.1` and
+`libayatana-appindicator` packages. It builds the locked source and never
+creates an autostart entry pointing into the checkout. The workbench's own
+Autostart switch can then register the durable installed executable.
+
+### Fedora and derivatives
 
 Build a native RPM with the Tauri CLI:
 
@@ -58,7 +76,7 @@ files containing RELR sections, so an AppImage failure there is a bundler
 compatibility limit, not a failed native build. Use the RPM on Fedora-family
 hosts until that upstream toolchain catches up.
 
-Pond's current HTTP server follows the daemon's bind. A default loopback daemon
-can publish the files locally but is not reachable from a phone; do not claim
-LAN access or silently expose the full operator API. Koi needs a dedicated
-read-only Pond listener for that default-install experience.
+Pond is a separately armed, read-only router inside the one Koi daemon. Phone
+publishes the fixed browser bundle, asks Koi to acquire the derived fourth port,
+and displays the exact URL Koi reports. Stop sharing disarms it; restarting Koi
+restores an enabled intent and continues reconciliation.

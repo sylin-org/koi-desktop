@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Koi
+GenericName=Network Workbench
+Comment=See and manage the services on your local network
+Exec=koi-desktop
+Icon=koi
+Terminal=false
+Categories=Network;
+StartupNotify=true
+StartupWMClass=koi
+Keywords=network;mDNS;DNS;services;discovery;
