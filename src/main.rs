@@ -282,6 +282,7 @@ async fn daemon_get(address: String, port: u16, path: String) -> Result<serde_js
 }
 
 const UI_POKE_PORT: u16 = 5640;
+const UI_REQUEST_LINE_LIMIT: u64 = 1024;
 
 enum UiInstanceClaim {
     Primary(std::net::TcpListener),
@@ -324,6 +325,14 @@ fn poke_route(request_line: &str) -> &'static str {
     }
 }
 
+fn read_ui_request_line(reader: impl std::io::Read) -> std::io::Result<String> {
+    use std::io::BufRead as _;
+
+    let mut line = String::new();
+    std::io::BufReader::new(reader.take(UI_REQUEST_LINE_LIMIT)).read_line(&mut line)?;
+    Ok(line)
+}
+
 /// localhost-only poke listener: any local process (a script, the installer,
 /// or a second ordinary launch) can nudge the one resident workbench to
 /// re-read the daemon immediately. Never binds beyond 127.0.0.1.
@@ -333,18 +342,8 @@ fn start_ui_poke_listener(listener: std::net::TcpListener, app: tauri::AppHandle
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(250)));
-            let mut buf = [0u8; 1024];
-            let _ = std::io::Read::read(&mut stream, &mut buf);
-            let request_line = String::from_utf8_lossy(&buf);
-            let route = poke_route(
-                request_line
-                    .split(
-                        "
-",
-                    )
-                    .next()
-                    .unwrap_or(""),
-            );
+            let request_line = read_ui_request_line(&mut stream).unwrap_or_default();
+            let route = poke_route(request_line.trim_end_matches(['\r', '\n']));
             let (code, body) = match route {
                 "show" => {
                     let ui_app = app.clone();
@@ -377,15 +376,17 @@ fn start_ui_poke_listener(listener: std::net::TcpListener, app: tauri::AppHandle
 fn request_running_ui(path: &str) -> std::io::Result<String> {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", UI_POKE_PORT))?;
     use std::io::Write;
-    write!(
-        stream,
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
-    )?;
+    let request = ui_request(path);
+    stream.write_all(request.as_bytes())?;
     stream.flush()?;
     stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
     let mut buf = Vec::new();
     let _ = std::io::Read::read_to_end(&mut stream, &mut buf);
     Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+fn ui_request(path: &str) -> String {
+    format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
 }
 
 fn poke_running_ui() -> std::io::Result<String> {
@@ -1854,6 +1855,38 @@ mod cycle1_guards {
         assert_eq!(super::poke_route("GET /poke HTTP/1.1"), "poke");
         assert_eq!(super::poke_route("GET /health HTTP/1.1"), "health");
         assert_eq!(super::poke_route("GET /unknown HTTP/1.1"), "other");
+    }
+
+    struct FragmentedReader(std::io::Cursor<Vec<u8>>);
+
+    impl std::io::Read for FragmentedReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let end = buf.len().min(3);
+            self.0.read(&mut buf[..end])
+        }
+    }
+
+    #[test]
+    fn ui_request_line_survives_fragmented_tcp_reads() {
+        let request = super::ui_request("/poke");
+        let reader = FragmentedReader(std::io::Cursor::new(request.into_bytes()));
+        let line = super::read_ui_request_line(reader).unwrap();
+
+        assert_eq!(line, "GET /poke HTTP/1.1\r\n");
+        assert_eq!(
+            super::poke_route(line.trim_end_matches(['\r', '\n'])),
+            "poke"
+        );
+    }
+
+    #[test]
+    fn ui_request_is_one_exact_bounded_http_message() {
+        let request = super::ui_request("/show");
+        assert_eq!(
+            request,
+            "GET /show HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        );
+        assert!(request.len() < super::UI_REQUEST_LINE_LIMIT as usize);
     }
 
     #[test]
