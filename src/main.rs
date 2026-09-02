@@ -295,7 +295,7 @@ fn claim_ui_instance() -> Result<UiInstanceClaim> {
     match std::net::TcpListener::bind(("127.0.0.1", UI_POKE_PORT)) {
         Ok(listener) => Ok(UiInstanceClaim::Primary(listener)),
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-            let poked = poke_running_ui()
+            let poked = show_running_ui()
                 .map(|response| poke_response_acknowledged(&response))
                 .unwrap_or(false);
             Ok(UiInstanceClaim::Existing { poked })
@@ -304,10 +304,15 @@ fn claim_ui_instance() -> Result<UiInstanceClaim> {
     }
 }
 
-/// Route a poke-request line. Loopback only; the only meaningful paths are
-/// /poke (refresh now) and /health (is a UI listening).
+/// Route a UI request line. Loopback only; /show reveals and refreshes the
+/// workbench, /poke refreshes it, and /health reports whether it is listening.
 fn poke_route(request_line: &str) -> &'static str {
-    if request_line.starts_with("GET /poke ")
+    if request_line.starts_with("GET /show ")
+        || request_line.starts_with("GET /show?")
+        || request_line == "GET /show"
+    {
+        "show"
+    } else if request_line.starts_with("GET /poke ")
         || request_line.starts_with("GET /poke?")
         || request_line == "GET /poke"
     {
@@ -341,6 +346,16 @@ fn start_ui_poke_listener(listener: std::net::TcpListener, app: tauri::AppHandle
                     .unwrap_or(""),
             );
             let (code, body) = match route {
+                "show" => {
+                    let ui_app = app.clone();
+                    match app.run_on_main_thread(move || {
+                        reveal_from_tray(&ui_app);
+                        let _ = ui_app.emit("ui-poked", serde_json::json!({}));
+                    }) {
+                        Ok(()) => ("200 OK", "show scheduled"),
+                        Err(_) => ("500 INTERNAL SERVER ERROR", "show unavailable"),
+                    }
+                }
                 "poke" => {
                     let _ = app.emit("ui-poked", serde_json::json!({}));
                     ("200 OK", "poked")
@@ -359,21 +374,26 @@ fn start_ui_poke_listener(listener: std::net::TcpListener, app: tauri::AppHandle
     });
 }
 
-fn poke_running_ui() -> std::io::Result<String> {
+fn request_running_ui(path: &str) -> std::io::Result<String> {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", UI_POKE_PORT))?;
     use std::io::Write;
-    stream.write_all(
-        b"GET /poke HTTP/1.1
-Host: 127.0.0.1
-Connection: close
-
-",
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
     )?;
     stream.flush()?;
     stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
     let mut buf = Vec::new();
     let _ = std::io::Read::read_to_end(&mut stream, &mut buf);
     Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+fn poke_running_ui() -> std::io::Result<String> {
+    request_running_ui("/poke")
+}
+
+fn show_running_ui() -> std::io::Result<String> {
+    request_running_ui("/show")
 }
 
 fn poke_response_acknowledged(response: &str) -> bool {
@@ -1812,6 +1832,14 @@ mod cycle1_guards {
         assert!(!super::poke_response_acknowledged(
             "HTTP/1.1 404 NOT FOUND\r\n\r\n"
         ));
+    }
+
+    #[test]
+    fn ordinary_launch_and_poke_have_distinct_routes() {
+        assert_eq!(super::poke_route("GET /show HTTP/1.1"), "show");
+        assert_eq!(super::poke_route("GET /poke HTTP/1.1"), "poke");
+        assert_eq!(super::poke_route("GET /health HTTP/1.1"), "health");
+        assert_eq!(super::poke_route("GET /unknown HTTP/1.1"), "other");
     }
 
     #[test]
