@@ -76,6 +76,15 @@ files containing RELR sections, so an AppImage failure there is a bundler
 compatibility limit, not a failed native build. Use the RPM on Fedora-family
 hosts until that upstream toolchain catches up.
 
+### Alpine Linux
+
+The native workbench links Alpine's shared GTK, WebKitGTK, and app-indicator
+libraries. The repository therefore disables Rust's default static CRT only for
+musl targets in `.cargo/config.toml`; application code and release behavior stay
+the same. With `build-base`, `webkit2gtk-4.1-dev`, and
+`libayatana-appindicator-dev` installed, the ordinary locked test, clippy, and
+release commands above build natively on Alpine.
+
 Pond is a separately armed, read-only router inside the one Koi daemon. Phone
 publishes the fixed browser bundle, asks Koi to acquire the derived fourth port,
 and displays the exact URL Koi reports. Stop sharing disarms it; restarting Koi
