@@ -65,6 +65,7 @@ fn run() -> Result<()> {
         tray_available: Arc::new(AtomicBool::new(false)),
     };
     let setup_tray_available = Arc::clone(&workbench.tray_available);
+    let close_tray_available = Arc::clone(&workbench.tray_available);
 
     let app = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         tauri::Builder::default()
@@ -132,9 +133,14 @@ fn run() -> Result<()> {
                 }
                 Ok(())
             })
-            .on_window_event(|_window, event| {
-                if let WindowEvent::Destroyed = event {
-                    eprintln!("Koi workbench window ended; the tray can recreate it");
+            .on_window_event(move |window, event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    if close_keeps_tray_alive(&close_tray_available) {
+                        api.prevent_close();
+                        if let Err(error) = window.hide() {
+                            eprintln!("Koi could not hide its workbench in the tray: {error}");
+                        }
+                    }
                 }
             })
             .build(tauri::generate_context!())
@@ -175,6 +181,10 @@ fn run() -> Result<()> {
     });
 
     Ok(())
+}
+
+fn close_keeps_tray_alive(tray_available: &AtomicBool) -> bool {
+    tray_available.load(Ordering::SeqCst)
 }
 
 /// WebKitGTK's DMA-BUF renderer aborts at Wayland protocol setup on the
@@ -1742,6 +1752,8 @@ fn hostname() -> String {
 
 #[cfg(test)]
 mod cycle1_guards {
+    use std::sync::atomic::AtomicBool;
+
     // The daemon's SSE event kinds (koi-dashboard/src/forward.rs). Adding a
     // kind there means adding its sentence here — the guard makes the drift
     // loud at build time, not at the operator's desk.
@@ -1771,6 +1783,12 @@ mod cycle1_guards {
     ];
 
     const SENTENCES_JS: &str = include_str!("../ui/sentences.js");
+
+    #[test]
+    fn close_only_stays_resident_when_the_tray_exists() {
+        assert!(super::close_keeps_tray_alive(&AtomicBool::new(true)));
+        assert!(!super::close_keeps_tray_alive(&AtomicBool::new(false)));
+    }
 
     #[test]
     fn every_known_kind_has_a_sentence_entry_and_a_registry_view() {
