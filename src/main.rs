@@ -1726,10 +1726,12 @@ fn reveal_from_tray(app: &tauri::AppHandle) {
 }
 
 fn show_workbench(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
-    match app.get_webview_window(MAIN_WINDOW) {
-        Some(window) => window.show(),
-        None => build_workbench(app).and_then(|window| window.show()),
-    }
+    let window = match app.get_webview_window(MAIN_WINDOW) {
+        Some(window) => window,
+        None => build_workbench(app)?,
+    };
+    window.show()?;
+    window.set_focus()
 }
 
 fn build_workbench(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri::Error> {
