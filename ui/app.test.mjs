@@ -96,6 +96,23 @@ test("feed: a restart storm is ONE flapping row with a count", async () => {
   assert.equal(row, "1|container service forge started — 4 times in the last 90s");
 });
 
+test("feed: flapping still delivers and re-arms watched fade episodes", async () => {
+  const { ctx } = await boot();
+  probe(ctx, `feedPin("container:forge")`);
+
+  probe(ctx, `feedAdmit({kind:"runtime.started", line:"container service forge started", tone:"good", target:"discover", subject:"container:forge"})`);
+  assert.equal(probe(ctx, `notifiedFades.has("container:forge")`), false);
+
+  probe(ctx, `feedAdmit({kind:"runtime.stopped", line:"container service forge stopped", tone:"info", target:"discover", subject:"container:forge"})`);
+  assert.equal(probe(ctx, `notifiedFades.has("container:forge")`), true,
+    "a compacted stopped event still opens one fade episode");
+
+  probe(ctx, `feedAdmit({kind:"runtime.started", line:"container service forge started", tone:"good", target:"discover", subject:"container:forge"})`);
+  assert.equal(probe(ctx, `notifiedFades.has("container:forge")`), false,
+    "a compacted start re-arms the next fade episode");
+  assert.equal(probe(ctx, "feed.rows.length"), 1, "the diary remains compacted");
+});
+
 test("feed: watched pins persist and unpin", async () => {
   const { ctx } = await boot();
   probe(ctx, `feedPin("container:forge")`);

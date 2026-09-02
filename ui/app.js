@@ -739,6 +739,13 @@ function feedNotify() {
 }
 
 function feedAdmit(entry) {
+  // Care follows every lifecycle event, even when the diary compacts a rapid
+  // restart storm into one flapping row below.
+  if (entry.kind === "runtime.stopped") {
+    watchedFade(entry.subject, entry.line + ".");
+  } else if (entry.kind === "runtime.started" || entry.kind === "runtime.reconnected") {
+    watchedAlive(entry.subject);
+  }
   // Flapping: the same subject restarting inside the window is ONE row + count.
   const prior = feed.flap.get(entry.subject);
   const restart = entry.kind === "runtime.started" || entry.kind === "runtime.stopped";
@@ -764,11 +771,6 @@ function feedAdmit(entry) {
     target: entry.target, subject: entry.subject, kind: entry.kind,
   });
   if (feed.rows.length > STREAM_CAP) feed.rows.length = STREAM_CAP;
-  if (entry.kind === "runtime.stopped") {
-    watchedFade(entry.subject, entry.line + ".");
-  } else if (entry.kind === "runtime.started" || entry.kind === "runtime.reconnected") {
-    watchedAlive(entry.subject);
-  }
   feedNotify();
 }
 

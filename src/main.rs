@@ -1294,6 +1294,21 @@ fn emit_down_status(app: &tauri::AppHandle) {
 
 static STATUS_STREAM_STARTED: AtomicBool = AtomicBool::new(false);
 
+fn decode_daemon_event(kind: &str, data: &str) -> Option<serde_json::Value> {
+    let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
+    let Some(version) = parsed.get("event_v") else {
+        // Compatibility with the older dashboard stream, whose data field was
+        // already the domain payload rather than a versioned wire envelope.
+        return Some(parsed);
+    };
+    if version.as_u64() != Some(1)
+        || parsed.get("event_type").and_then(|value| value.as_str()) != Some(kind)
+    {
+        return None;
+    }
+    parsed.get("data").cloned()
+}
+
 /// The lamp rides the daemon's unified SSE stream (`/v1/events`, DAT-gated):
 /// connect → push a fresh status; heartbeat → refresh; any event → forward.
 /// No polling anywhere in the loop; reconnects with backoff when it drops.
@@ -1336,15 +1351,12 @@ fn status_events_start(app: tauri::AppHandle) -> Result<(), String> {
                                 let _ =
                                     app.emit("daemon-status", fetch_status_value(&agent, &access));
                             } else if !kind.is_empty() {
-                                let parsed: Option<serde_json::Value> = if data.is_empty() {
-                                    None
-                                } else {
-                                    serde_json::from_str(&data).ok()
-                                };
-                                let _ = app.emit(
-                                    "daemon-event",
-                                    serde_json::json!({ "kind": kind, "data": parsed }),
-                                );
+                                if let Some(payload) = decode_daemon_event(&kind, &data) {
+                                    let _ = app.emit(
+                                        "daemon-event",
+                                        serde_json::json!({ "kind": kind, "data": payload }),
+                                    );
+                                }
                             }
                             kind.clear();
                             data.clear();
@@ -1842,6 +1854,52 @@ mod cycle1_guards {
         assert_eq!(super::poke_route("GET /poke HTTP/1.1"), "poke");
         assert_eq!(super::poke_route("GET /health HTTP/1.1"), "health");
         assert_eq!(super::poke_route("GET /unknown HTTP/1.1"), "other");
+    }
+
+    #[test]
+    fn daemon_event_decoder_unwraps_the_versioned_wire_payload() {
+        let raw = serde_json::json!({
+            "event_v": 1,
+            "event_type": "runtime.stopped",
+            "id": "event-1",
+            "data": { "id": "container-1", "name": "forge" }
+        })
+        .to_string();
+
+        let payload = super::decode_daemon_event("runtime.stopped", &raw)
+            .expect("a version-one event should decode");
+        assert_eq!(payload["id"], "container-1");
+        assert_eq!(payload["name"], "forge");
+        assert!(payload.get("event_v").is_none());
+    }
+
+    #[test]
+    fn daemon_event_decoder_skips_unknown_versions_and_mismatched_kinds() {
+        let unknown = serde_json::json!({
+            "event_v": 2,
+            "event_type": "runtime.stopped",
+            "id": "event-2",
+            "data": { "name": "forge" }
+        })
+        .to_string();
+        assert!(super::decode_daemon_event("runtime.stopped", &unknown).is_none());
+
+        let mismatched = serde_json::json!({
+            "event_v": 1,
+            "event_type": "runtime.started",
+            "id": "event-3",
+            "data": { "name": "forge" }
+        })
+        .to_string();
+        assert!(super::decode_daemon_event("runtime.stopped", &mismatched).is_none());
+    }
+
+    #[test]
+    fn daemon_event_decoder_keeps_legacy_bare_payloads_compatible() {
+        let raw = serde_json::json!({ "id": "container-1", "name": "forge" }).to_string();
+        let payload = super::decode_daemon_event("runtime.stopped", &raw)
+            .expect("a legacy payload should still decode");
+        assert_eq!(payload["name"], "forge");
     }
 
     #[test]
