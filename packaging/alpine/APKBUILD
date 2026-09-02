@@ -1,0 +1,55 @@
+# Maintainer: Sylin <hello@sylin.org>
+
+pkgname=koi-desktop
+pkgver=0.1.2_git20260902
+pkgrel=1
+pkgdesc="Koi's native network workbench"
+url="https://github.com/sylin-org/koi-desktop"
+arch="x86_64 aarch64"
+license="MIT OR Apache-2.0"
+depends="xdg-utils polkit"
+makedepends="
+	build-base
+	cargo
+	git
+	gtk+3.0-dev
+	libayatana-appindicator-dev
+	rust
+	webkit2gtk-4.1-dev
+	"
+checkdepends="desktop-file-utils nodejs"
+subpackages="$pkgname-doc"
+# Cargo fetches the locked crates and pinned Tao revision during local builds.
+options="net"
+_commit=2c2b74ae929c2db05996b33ae22131aa2515962c
+source="$pkgname-$_commit.tar.gz::$url/archive/$_commit.tar.gz"
+builddir="$srcdir/$pkgname-$_commit"
+
+build() {
+	RUSTFLAGS="$RUSTFLAGS -C target-feature=-crt-static" \
+		CARGO_TARGET_DIR="$srcdir/target" \
+		cargo build --locked --release
+}
+
+check() {
+	RUSTFLAGS="$RUSTFLAGS -C target-feature=-crt-static" \
+		CARGO_TARGET_DIR="$srcdir/target" \
+		cargo test --locked
+	node --test ui/app.test.mjs
+	desktop-file-validate packaging/arch/koi-desktop.desktop
+}
+
+package() {
+	install -Dm755 "$srcdir/target/release/koi-desktop" \
+		"$pkgdir/usr/bin/koi-desktop"
+	install -Dm644 packaging/arch/koi-desktop.desktop \
+		"$pkgdir/usr/share/applications/koi-desktop.desktop"
+	install -Dm644 icons/koi.png \
+		"$pkgdir/usr/share/pixmaps/koi.png"
+	install -Dm644 README.md \
+		"$pkgdir/usr/share/doc/koi-desktop/README.md"
+}
+
+sha512sums="
+2b0c5850e8d40391e8699acd1c0607d2b8082e50ff69fc13fbd561d5de79030fc7a7664a04a21072b3325a057aad6f36fcb0f1cc90e6219f84eca561c804b452  koi-desktop-2c2b74ae929c2db05996b33ae22131aa2515962c.tar.gz
+"

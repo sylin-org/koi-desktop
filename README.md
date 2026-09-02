@@ -85,6 +85,31 @@ the same. With `build-base`, `webkit2gtk-4.1-dev`, and
 `libayatana-appindicator-dev` installed, the ordinary locked test, clippy, and
 release commands above build natively on Alpine.
 
+Build the native APK from the commit-pinned recipe, then install that artifact
+through `apk` so the binary, desktop entry, icon, and upgrades have one owner:
+
+```sh
+doas apk add alpine-sdk atools desktop-file-utils
+doas addgroup "$USER" abuild
+abuild-keygen -a -n
+cd packaging/alpine
+abuild -r
+doas apk add --allow-untrusted \
+  --repository "$HOME/packages/packaging" koi-desktop
+```
+
+Later recipe revisions follow the ordinary package path: rebuild with `abuild -r`,
+then upgrade the installed package from that repository:
+
+```sh
+doas apk upgrade --allow-untrusted \
+  --repository "$HOME/packages/packaging" koi-desktop
+```
+
+The APK depends on Alpine's WebKitGTK/app-indicator shared libraries plus
+`xdg-utils` and the platform `polkit` provider; it never installs a checkout
+executable.
+
 Pond is a separately armed, read-only router inside the one Koi daemon. Phone
 publishes the fixed browser bundle, asks Koi to acquire the derived fourth port,
 and displays the exact URL Koi reports. Stop sharing disarms it; restarting Koi
