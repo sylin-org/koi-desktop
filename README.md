@@ -29,6 +29,18 @@ daemon to arm its narrow LAN adapter and renders only the URL backed by the
 daemon's real socket and host-policy assessment; the full operator API remains
 local.
 
+On Windows, an installed SYSTEM daemon and the interactive workbench meet through
+Koi's authenticated named pipe. A readable breadcrumb is only a fast path, not a
+deployment requirement. The installer records one operator SID; the workbench does
+not broaden that trust boundary.
+
+Watched-item fade notifications are deliberately one-shot per fade episode. A
+successful handoff means Windows accepted the notification; Focus Assist / Do Not
+Disturb can still suppress the visible banner, and Koi does not override that OS
+policy. Pond is separate from notifications and from the operator API: it is an
+explicitly armed, read-only listener whose exact URL and firewall assessment come
+from the daemon.
+
 ## Development
 
 ```sh
