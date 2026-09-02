@@ -9,6 +9,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod local_daemon;
+#[cfg(target_os = "linux")]
+mod service_manager;
 
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +27,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager, RunEvent, WebviewWindowBuilder, WindowEvent};
 
 const MAIN_WINDOW: &str = "main";
+#[cfg(windows)]
 const SERVICE_NAME: &str = "koi";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -1474,44 +1477,7 @@ fn service_status() -> ServiceStatus {
 
 #[cfg(target_os = "linux")]
 fn linux_service_status() -> ServiceStatus {
-    match Command::new("systemctl")
-        .args(["show", SERVICE_NAME, "--property=LoadState,ActiveState"])
-        .output()
-    {
-        Ok(output) => {
-            let text = String::from_utf8_lossy(&output.stdout);
-            let installed = text.lines().any(|line| line == "LoadState=loaded");
-            let running = text.lines().any(|line| line == "ActiveState=active");
-            ServiceStatus {
-                installed,
-                running,
-                detail: (!output.status.success())
-                    .then(|| String::from_utf8_lossy(&output.stderr).trim().to_owned()),
-            }
-        }
-        Err(error) => ServiceStatus {
-            installed: false,
-            running: false,
-            detail: Some(format!("systemctl query failed: {error}")),
-        },
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn systemctl_action(action: &str) -> Result<StartResult, String> {
-    let output = Command::new("systemctl")
-        .args([action, SERVICE_NAME])
-        .output()
-        .map_err(|e| format!("could not run systemctl: {e}"))?;
-    if output.status.success() {
-        return Ok(StartResult::ok(format!("Service {action} issued.")));
-    }
-    let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    Err(if detail.is_empty() {
-        format!("systemd refused to {action} Koi")
-    } else {
-        detail
-    })
+    service_manager::status()
 }
 
 #[tauri::command]
@@ -1546,7 +1512,7 @@ fn service_start() -> Result<StartResult, String> {
     {
         #[cfg(target_os = "linux")]
         {
-            systemctl_action("start")
+            service_manager::start().map(StartResult::ok)
         }
         #[cfg(not(target_os = "linux"))]
         Err("service controls are unavailable on this platform".into())
@@ -1571,7 +1537,7 @@ fn service_stop() -> Result<StartResult, String> {
     {
         #[cfg(target_os = "linux")]
         {
-            systemctl_action("stop")
+            service_manager::stop().map(StartResult::ok)
         }
         #[cfg(not(target_os = "linux"))]
         Err("service controls are unavailable on this platform".into())
