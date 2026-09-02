@@ -58,6 +58,16 @@ fn run() -> Result<()> {
     if std::env::args().any(|a| a == "--poke") {
         run_poke_and_exit();
     }
+    let ui_listener = match claim_ui_instance()? {
+        UiInstanceClaim::Primary(listener) => listener,
+        UiInstanceClaim::Existing { poked } => {
+            println!(
+                "Koi is already running{}",
+                if poked { "; revealed it" } else { "" }
+            );
+            return Ok(());
+        }
+    };
     if std::env::args().any(|arg| arg == "--minimized") {
         START_MINIMIZED.store(true, Ordering::SeqCst);
     }
@@ -116,9 +126,7 @@ fn run() -> Result<()> {
                 debug_log
             ])
             .setup(move |app| {
-                if let Err(error) = start_ui_poke_listener(app.handle().clone()) {
-                    eprintln!("Koi poke listener unavailable: {error}");
-                }
+                start_ui_poke_listener(ui_listener, app.handle().clone());
                 match build_tray(app) {
                     Ok(info_item) => {
                         start_posture_polling(app.handle().clone(), info_item);
@@ -275,6 +283,27 @@ async fn daemon_get(address: String, port: u16, path: String) -> Result<serde_js
 
 const UI_POKE_PORT: u16 = 5640;
 
+enum UiInstanceClaim {
+    Primary(std::net::TcpListener),
+    Existing { poked: bool },
+}
+
+/// Claim the same loopback listener used for UI pokes before constructing any
+/// tray or window. Binding is atomic, so simultaneous autostart/session-restore
+/// launches cannot both become resident workbenches.
+fn claim_ui_instance() -> Result<UiInstanceClaim> {
+    match std::net::TcpListener::bind(("127.0.0.1", UI_POKE_PORT)) {
+        Ok(listener) => Ok(UiInstanceClaim::Primary(listener)),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            let poked = poke_running_ui()
+                .map(|response| poke_response_acknowledged(&response))
+                .unwrap_or(false);
+            Ok(UiInstanceClaim::Existing { poked })
+        }
+        Err(error) => anyhow::bail!("claim Koi UI port {UI_POKE_PORT}: {error}"),
+    }
+}
+
 /// Route a poke-request line. Loopback only; the only meaningful paths are
 /// /poke (refresh now) and /health (is a UI listening).
 fn poke_route(request_line: &str) -> &'static str {
@@ -291,29 +320,9 @@ fn poke_route(request_line: &str) -> &'static str {
 }
 
 /// localhost-only poke listener: any local process (a script, the installer,
-/// a second instance with --poke) can nudge every running workbench to
+/// or a second ordinary launch) can nudge the one resident workbench to
 /// re-read the daemon immediately. Never binds beyond 127.0.0.1.
-fn start_ui_poke_listener(app: tauri::AppHandle) -> Result<(), String> {
-    // A kill-then-relaunch cycle can leave the old socket lingering for a
-    // moment; retry the bind instead of going poke-less for the whole run.
-    let listener = {
-        let mut bound = None;
-        for attempt in 0..20 {
-            match std::net::TcpListener::bind(("127.0.0.1", UI_POKE_PORT)) {
-                Ok(l) => {
-                    bound = Some(l);
-                    break;
-                }
-                Err(e) => {
-                    if attempt == 19 {
-                        return Err(format!("poke port {}: {e}", UI_POKE_PORT));
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                }
-            }
-        }
-        bound.expect("bind retried 20 times")
-    };
+fn start_ui_poke_listener(listener: std::net::TcpListener, app: tauri::AppHandle) {
     std::thread::spawn(move || {
         use std::io::Write as _;
         for stream in listener.incoming() {
@@ -348,32 +357,37 @@ fn start_ui_poke_listener(app: tauri::AppHandle) -> Result<(), String> {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
     });
-    Ok(())
+}
+
+fn poke_running_ui() -> std::io::Result<String> {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", UI_POKE_PORT))?;
+    use std::io::Write;
+    stream.write_all(
+        b"GET /poke HTTP/1.1
+Host: 127.0.0.1
+Connection: close
+
+",
+    )?;
+    stream.flush()?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+    let mut buf = Vec::new();
+    let _ = std::io::Read::read_to_end(&mut stream, &mut buf);
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+fn poke_response_acknowledged(response: &str) -> bool {
+    response.contains("200 OK")
 }
 
 /// Second-instance nudge: `koi-desktop --poke` pokes every running UI on
 /// this machine and exits without starting a new workbench.
 fn run_poke_and_exit() -> ! {
-    let result =
-        std::net::TcpStream::connect(("127.0.0.1", UI_POKE_PORT)).and_then(|mut stream| {
-            use std::io::Write;
-            stream.write_all(
-                b"GET /poke HTTP/1.1
-Host: 127.0.0.1
-Connection: close
-
-",
-            )?;
-            stream.flush()?;
-            stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
-            let mut buf = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut stream, &mut buf);
-            Ok(String::from_utf8_lossy(&buf).into_owned())
-        });
+    let result = poke_running_ui();
     match result {
         Ok(text) => println!(
             "poked a running koi ui: {}",
-            if text.contains("200 OK") {
+            if poke_response_acknowledged(&text) {
                 "acknowledged".to_string()
             } else {
                 text
@@ -1788,6 +1802,16 @@ mod cycle1_guards {
     fn close_only_stays_resident_when_the_tray_exists() {
         assert!(super::close_keeps_tray_alive(&AtomicBool::new(true)));
         assert!(!super::close_keeps_tray_alive(&AtomicBool::new(false)));
+    }
+
+    #[test]
+    fn only_a_successful_poke_response_is_acknowledged() {
+        assert!(super::poke_response_acknowledged(
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\npoked"
+        ));
+        assert!(!super::poke_response_acknowledged(
+            "HTTP/1.1 404 NOT FOUND\r\n\r\n"
+        ));
     }
 
     #[test]
