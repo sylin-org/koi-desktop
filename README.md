@@ -24,7 +24,7 @@ workbench are three doors into the same pond.
 
 The workbench is functional on Windows and glibc Linux: singleton lifecycle,
 tray reveal, login startup, live status/events, discovery/browser/diff, DNS,
-trust, capability glass, and read-only Pond publishing. Version 0.1.2 asks the
+trust, capability glass, and read-only Pond publishing. Version 0.1.3 asks the
 daemon to arm its narrow LAN adapter and renders only the URL backed by the
 daemon's real socket and host-policy assessment; the full operator API remains
 local.
