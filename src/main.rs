@@ -122,6 +122,11 @@ fn run() -> Result<()> {
                 autostart_state,
                 autostart_set,
                 daemon_status_full,
+                catalog_snapshot,
+                catalog_preferences,
+                catalog_set_service_preference,
+                catalog_set_candidate_preference,
+                catalog_start,
                 status_events_start,
                 debug_log
             ])
@@ -538,10 +543,51 @@ fn daemon_json(
     };
     request = request.set("x-koi-token", &access.token);
     let response = match body {
-        Some(body) => request
-            .send_json(body)
-            .map_err(|e| format!("{method} {path} failed: {e}"))?,
-        None => request.call().map_err(|e| format!("{path} failed: {e}"))?,
+        Some(body) => request.send_json(body),
+        None => request.call(),
+    };
+    decode_json_response(method, path, response)
+}
+
+fn decode_json_response(
+    method: &str,
+    path: &str,
+    response: Result<ureq::Response, ureq::Error>,
+) -> Result<serde_json::Value, String> {
+    let response = match response {
+        Ok(response) => response,
+        Err(ureq::Error::Status(status, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            if let Ok(problem) = serde_json::from_str::<serde_json::Value>(&body) {
+                let code = problem
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("daemon_error");
+                let message = problem
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("the daemon rejected the request");
+                let versions = match (
+                    problem
+                        .get("found_schema")
+                        .and_then(serde_json::Value::as_u64),
+                    problem
+                        .get("minimum_schema")
+                        .and_then(serde_json::Value::as_u64),
+                    problem
+                        .get("maximum_schema")
+                        .and_then(serde_json::Value::as_u64),
+                ) {
+                    (Some(found), Some(minimum), Some(maximum)) => {
+                        format!("; schema {found}, supported {minimum}..={maximum}")
+                    }
+                    _ => String::new(),
+                };
+                return Err(format!("{code}: {message}{versions} (HTTP {status})"));
+            }
+            return Err(format!("{method} {path} failed with HTTP {status}"));
+        }
+        Err(error) => return Err(format!("{method} {path} failed: {error}")),
     };
     let text = response
         .into_string()
@@ -550,6 +596,228 @@ fn daemon_json(
         return Ok(serde_json::json!({ "ok": true }));
     }
     serde_json::from_str(&text).map_err(|e| format!("{path} malformed: {e}"))
+}
+
+const SERVICE_CONTRACT_SCHEMA: u64 = 1;
+
+fn require_service_schema(
+    value: serde_json::Value,
+    surface: &str,
+) -> Result<serde_json::Value, String> {
+    let found = value.get("schema").and_then(serde_json::Value::as_u64);
+    if found != Some(SERVICE_CONTRACT_SCHEMA) {
+        let found = found
+            .map(|schema| schema.to_string())
+            .unwrap_or_else(|| "missing".into());
+        return Err(format!(
+            "unsupported_schema: {surface} schema is {found}; this desktop supports 1..=1"
+        ));
+    }
+    Ok(value)
+}
+
+fn service_contract_request(
+    result: Result<serde_json::Value, String>,
+    surface: &str,
+) -> Result<serde_json::Value, String> {
+    match result {
+        Ok(value) => require_service_schema(value, surface),
+        Err(error) if error.contains("HTTP 404") => Err(format!(
+            "unsupported_schema: this daemon does not expose {surface} schema 1; this desktop supports 1..=1"
+        )),
+        Err(error) => Err(error),
+    }
+}
+
+fn validate_catalog_id(value: &str, kind: &str) -> Result<(), String> {
+    if value.is_empty()
+        || !value.is_ascii()
+        || value.bytes().any(|byte| {
+            !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte))
+        })
+    {
+        return Err(format!("invalid {kind} id"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn catalog_snapshot() -> Result<serde_json::Value, String> {
+    service_contract_request(daemon_json("GET", "/v1/catalog", None), "catalog")
+}
+
+#[tauri::command]
+fn catalog_preferences() -> Result<serde_json::Value, String> {
+    service_contract_request(daemon_json("GET", "/v1/preferences", None), "preferences")
+}
+
+#[tauri::command]
+fn catalog_set_service_preference(
+    service_id: String,
+    expected_revision: u64,
+    favorite: bool,
+    friendly_alias: Option<String>,
+) -> Result<serde_json::Value, String> {
+    validate_catalog_id(&service_id, "service")?;
+    let result = daemon_json(
+        "PUT",
+        &format!("/v1/preferences/services/{service_id}"),
+        Some(serde_json::json!({
+            "schema": SERVICE_CONTRACT_SCHEMA,
+            "expected_revision": expected_revision,
+            "service_key": { "kind": "koi_service", "id": service_id },
+            "favorite": favorite,
+            "friendly_alias": friendly_alias,
+        })),
+    )?;
+    require_service_schema(result, "preferences")
+}
+
+#[tauri::command]
+fn catalog_set_candidate_preference(
+    candidate_id: String,
+    recognizer: String,
+    source: String,
+    expected_revision: u64,
+    dismissed: bool,
+) -> Result<serde_json::Value, String> {
+    validate_catalog_id(&candidate_id, "candidate")?;
+    let result = daemon_json(
+        "PUT",
+        &format!("/v1/preferences/candidates/{candidate_id}"),
+        Some(serde_json::json!({
+            "schema": SERVICE_CONTRACT_SCHEMA,
+            "expected_revision": expected_revision,
+            "candidate_key": { "recognizer": recognizer, "source": source },
+            "dismissed": dismissed,
+        })),
+    )?;
+    require_service_schema(result, "preferences")
+}
+
+fn fetch_catalog(
+    agent: &ureq::Agent,
+    access: &local_daemon::DaemonAccess,
+) -> Result<serde_json::Value, String> {
+    let response = agent
+        .get(&access.url("/v1/catalog"))
+        .set("x-koi-token", &access.token)
+        .call();
+    require_service_schema(
+        decode_json_response("GET", "/v1/catalog", response)?,
+        "catalog",
+    )
+}
+
+fn catalog_position(value: &serde_json::Value) -> Option<(&str, u64)> {
+    Some((
+        value.get("epoch")?.as_str()?,
+        value.get("revision")?.as_u64()?,
+    ))
+}
+
+fn emit_catalog(app: &tauri::AppHandle, value: serde_json::Value) {
+    let _ = app.emit("catalog-snapshot", value);
+}
+
+fn emit_catalog_error(app: &tauri::AppHandle, error: impl std::fmt::Display) {
+    let _ = app.emit("catalog-error", error.to_string());
+}
+
+static CATALOG_STREAM_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Follow the authoritative full-snapshot catalog stream. A gap, malformed
+/// event, or lost stream causes a fresh GET before the next UI publication.
+#[tauri::command]
+fn catalog_start(app: tauri::AppHandle) -> Result<(), String> {
+    if CATALOG_STREAM_STARTED.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    std::thread::spawn(move || loop {
+        let Ok(access) = local_daemon::discover() else {
+            emit_catalog_error(&app, "catalog unavailable: no local Koi daemon access");
+            std::thread::sleep(Duration::from_secs(3));
+            continue;
+        };
+        let agent = daemon_agent();
+        let response = agent
+            .get(&access.url("/v1/catalog/events"))
+            .set("x-koi-token", &access.token)
+            .call();
+        match response {
+            Ok(response) => {
+                let mut current = match fetch_catalog(&agent, &access) {
+                    Ok(snapshot) => {
+                        emit_catalog(&app, snapshot.clone());
+                        Some(snapshot)
+                    }
+                    Err(error) => {
+                        emit_catalog_error(&app, error);
+                        None
+                    }
+                };
+                let mut reader = std::io::BufReader::new(response.into_reader());
+                let mut data = String::new();
+                loop {
+                    let mut line = String::new();
+                    match std::io::BufRead::read_line(&mut reader, &mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let line = line.trim_end();
+                    if let Some(fragment) = line.strip_prefix("data:") {
+                        data.push_str(fragment.trim());
+                    } else if line.is_empty() && !data.is_empty() {
+                        let event = serde_json::from_str::<serde_json::Value>(&data)
+                            .map_err(|error| format!("catalog event malformed: {error}"))
+                            .and_then(|value| require_service_schema(value, "catalog"));
+                        data.clear();
+                        match event {
+                            Ok(event) => {
+                                let position = catalog_position(&event);
+                                let previous = current.as_ref().and_then(catalog_position);
+                                let stale = matches!((previous, position),
+                                    (Some((old_epoch, old_revision)), Some((new_epoch, new_revision)))
+                                    if old_epoch == new_epoch && new_revision <= old_revision);
+                                if stale {
+                                    continue;
+                                }
+                                let continuous = matches!((previous, position),
+                                    (Some((old_epoch, old_revision)), Some((new_epoch, new_revision)))
+                                    if old_epoch == new_epoch && new_revision == old_revision.saturating_add(1));
+                                if continuous {
+                                    emit_catalog(&app, event.clone());
+                                    current = Some(event);
+                                } else {
+                                    match fetch_catalog(&agent, &access) {
+                                        Ok(snapshot) => {
+                                            emit_catalog(&app, snapshot.clone());
+                                            current = Some(snapshot);
+                                        }
+                                        Err(error) => emit_catalog_error(&app, error),
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                emit_catalog_error(&app, error);
+                                if let Ok(snapshot) = fetch_catalog(&agent, &access) {
+                                    emit_catalog(&app, snapshot.clone());
+                                    current = Some(snapshot);
+                                }
+                            }
+                        }
+                    }
+                }
+                match fetch_catalog(&agent, &access) {
+                    Ok(snapshot) => emit_catalog(&app, snapshot),
+                    Err(error) => emit_catalog_error(&app, error),
+                }
+            }
+            Err(error) => emit_catalog_error(&app, format!("catalog stream unavailable: {error}")),
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    });
+    Ok(())
 }
 
 // ── CA + membership management (cycle-1, operator direction) ────────
@@ -1904,6 +2172,35 @@ mod cycle1_guards {
         assert_eq!(payload["id"], "container-1");
         assert_eq!(payload["name"], "forge");
         assert!(payload.get("event_v").is_none());
+    }
+
+    #[test]
+    fn service_contract_rejects_missing_and_future_schemas_clearly() {
+        assert!(super::require_service_schema(
+            serde_json::json!({ "schema": 1, "revision": 3 }),
+            "catalog"
+        )
+        .is_ok());
+        for value in [serde_json::json!({}), serde_json::json!({ "schema": 2 })] {
+            let error = super::require_service_schema(value, "catalog").unwrap_err();
+            assert!(error.contains("unsupported_schema"));
+            assert!(error.contains("1..=1"));
+        }
+        let old_daemon = super::service_contract_request(
+            Err("GET /v1/catalog failed with HTTP 404".to_string()),
+            "catalog",
+        )
+        .unwrap_err();
+        assert!(old_daemon.contains("unsupported_schema"));
+        assert!(old_daemon.contains("does not expose catalog schema 1"));
+    }
+
+    #[test]
+    fn preference_route_ids_cannot_escape_their_path_segment() {
+        assert!(super::validate_catalog_id("svc_0199-deadbeef", "service").is_ok());
+        for value in ["", "svc/other", "Svc_Upper", "svc one"] {
+            assert!(super::validate_catalog_id(value, "service").is_err());
+        }
     }
 
     #[test]

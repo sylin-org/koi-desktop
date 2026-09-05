@@ -305,6 +305,12 @@ let typeFilter = "";
 let stateFilter = "";
 let discoverLens = "family"; // the curated pond by default; "all" is the raw water
 
+// Schema-1 catalog is the only authority for stable service identity and
+// personal favorites. The legacy cache remains a transient discovery view.
+const catalog = { snapshot: null, preferences: null, error: null };
+const LEGACY_WATCHED_KEY = "koi-watched";
+const LEGACY_WATCHED_BACKUP_KEY = "koi-watched-schema0-backup";
+
 const LIVE_MS = 90 * 1000;
 const FADING_MS = 10 * 60 * 1000;
 const FAMILY = /(koi|moss|zen-?garden|ghostlight|sylin|koan)/i;
@@ -355,11 +361,53 @@ function agoText(ts) {
   return `${Math.floor(s / 86400)}d`;
 }
 
+function catalogServicesForLegacyName(name) {
+  if (!catalog.snapshot) return [];
+  return (catalog.snapshot.services ?? []).filter((service) =>
+    (service.observations ?? []).some((observation) => observation.raw_reference?.name === name));
+}
+
+function catalogServiceForRecord(record) {
+  if (!catalog.snapshot) return null;
+  const candidates = (catalog.snapshot.services ?? []).filter((service) =>
+    (service.observations ?? []).some((observation) => {
+      const raw = observation.raw_reference ?? {};
+      return raw.name === (record.name || record.instance_name || "") &&
+        raw.service_type === record.service_type;
+    }));
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+function preferenceSubjectForRecord(record) {
+  const service = catalogServiceForRecord(record);
+  return service ? `service:${service.id}` : null;
+}
+
+function recordIsWatched(record) {
+  const durable = preferenceSubjectForRecord(record);
+  const legacy = "announcement:" + (record.name || record.instance_name || "");
+  return Boolean((durable && feed.watched.has(durable)) || feed.watched.has(legacy));
+}
+
+function durableSubject(subject) {
+  if (!String(subject).startsWith("announcement:")) return subject;
+  const name = String(subject).slice("announcement:".length);
+  const services = catalogServicesForLegacyName(name);
+  return services.length === 1 ? `service:${services[0].id}` : subject;
+}
+
+function watchedLabel(subject) {
+  if (!String(subject).startsWith("service:")) return subject;
+  const id = String(subject).slice("service:".length);
+  const service = (catalog.snapshot?.services ?? []).find((item) => item.id === id);
+  return service?.alias || service?.display_name || subject;
+}
+
 function passesFilters(r) {
   // Discover is the curated lens (the pond): the koi family plus starred
   // subjects. Everything else lives in the Browser pane (the water) —
   // a lens, never a silent absence.
-  if (discoverLens === "family" && !isFamily(r) && !feed.watched.has("announcement:" + (r.name || r.instance_name || ""))) return false;
+  if (discoverLens === "family" && !isFamily(r) && !recordIsWatched(r)) return false;
   if (typeFilter && r.service_type !== typeFilter) return false;
   const p = presence(r);
   if (stateFilter === "live" && p !== "live") return false;
@@ -382,7 +430,7 @@ function upsertInstance(record) {
     gone: false,
   };
   instances.set(k, next);
-  watchedAlive("announcement:" + next.name);
+  watchedAlive(durableSubject("announcement:" + next.name));
   renderGroupFor(next);
   updateDiscoverTiles();
   refreshTypeDropdown();
@@ -397,7 +445,7 @@ function markGone(evt) {
   r.goneAt = Date.now();
   const passageKeyGone = `${String(r.host || r.ip || "").replace(/\.$/, "").trim().toLowerCase()}:${r.port ?? ""}`;
   passageCache.delete(passageKeyGone);
-  watchedFade("announcement:" + (evt.name ?? r.name), `${r.instance_name || r.name} went away.`);
+  watchedFade(durableSubject("announcement:" + (evt.name ?? r.name)), `${r.instance_name || r.name} went away.`);
   renderGroupFor(r);
   if (browserIsActive()) renderBrowser();
 }
@@ -430,35 +478,50 @@ function rowClass(r) {
 }
 
 function starButton(r) {
-  const subject = "announcement:" + (r.name || r.instance_name);
   const btn = document.createElement("button");
   btn.className = "row-star";
   btn.type = "button";
   const paint = () => {
-    const on = feed.watched.has(subject);
+    const service = catalogServiceForRecord(r);
+    const subject = preferenceSubjectForRecord(r);
+    const on = Boolean(subject && feed.watched.has(subject));
     btn.textContent = on ? "★" : "☆";
-    btn.title = on ? "Unwatch — no more fade notifications" : "Watch — notify me when it fades";
+    btn.disabled = !service || catalog.preferences?.mode !== "writable";
+    btn.title = !service
+      ? "Waiting for one unambiguous stable service identity"
+      : catalog.preferences?.mode !== "writable"
+        ? (catalog.error || "Preferences are unavailable")
+        : on ? "Unfavorite — no more fade notifications" : "Favorite — notify me when it fades";
     btn.classList.toggle("pinned", on);
   };
   paint();
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    feed.watched.has(subject) ? feedUnpin(subject) : feedPin(subject);
-    paint();
+    const service = catalogServiceForRecord(r);
+    if (!service) return;
+    const on = feed.watched.has(`service:${service.id}`);
+    setCatalogFavorite(service.id, !on).catch((error) => {
+      catalog.error = String(error);
+      note(catalog.error, true);
+      dlog(`favorite failed: ${error}`);
+    });
   });
-  feed.listeners.add(paint);
   return btn;
+}
+
+function appendRowActions(node, r) {
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+  node.append(actions);
+  if (passageAllowedFor(r)) actions.append(passageButton(r));
+  actions.append(starButton(r));
 }
 
 function buildRow(r) {
   const node = document.createElement("div");
   node.className = rowClass(r) + " landing";
   node.innerHTML = rowMarkup(r);
-  const actions = document.createElement("div");
-  actions.className = "row-actions";
-  node.append(actions);
-  if (passageAllowedFor(r)) actions.append(passageButton(r));
-  actions.append(starButton(r));
+  appendRowActions(node, r);
   node.addEventListener("animationend", () => node.classList.remove("landing"), { once: true });
   return node;
 }
@@ -466,6 +529,7 @@ function buildRow(r) {
 function updateRowNode(node, r) {
   node.className = rowClass(r);
   node.innerHTML = rowMarkup(r);
+  appendRowActions(node, r);
 }
 
 function groupKeyOf(r) {
@@ -728,6 +792,110 @@ const feed = {
 };
 try { feed.watched = new Set(JSON.parse(localStorage.getItem("koi-watched") || "[]")); } catch (_) {}
 
+function syncFavoriteSubjects() {
+  for (const subject of [...feed.watched]) {
+    if (String(subject).startsWith("service:")) feed.watched.delete(subject);
+  }
+  for (const preference of catalog.preferences?.services ?? []) {
+    if (preference.favorite && preference.service_key?.kind === "koi_service") {
+      feed.watched.add(`service:${preference.service_key.id}`);
+    }
+  }
+  feedNotify();
+}
+
+function preferenceForService(serviceId) {
+  return (catalog.preferences?.services ?? []).find((record) =>
+    record.service_key?.kind === "koi_service" && record.service_key.id === serviceId);
+}
+
+async function setCatalogFavorite(serviceId, favorite) {
+  if (!invoke) throw new Error("Favorites can only be changed in the desktop app.");
+  if (catalog.preferences?.mode !== "writable") {
+    throw new Error(catalog.error || "Preferences are not writable.");
+  }
+  const existing = preferenceForService(serviceId);
+  catalog.preferences = await invoke("catalog_set_service_preference", {
+    service_id: serviceId,
+    expected_revision: catalog.preferences.revision,
+    favorite,
+    friendly_alias: existing?.friendly_alias ?? null,
+  });
+  catalog.snapshot = await invoke("catalog_snapshot");
+  catalog.error = null;
+  syncFavoriteSubjects();
+  renderAllGroups();
+}
+
+async function migrateLegacyWatched() {
+  const original = localStorage.getItem(LEGACY_WATCHED_KEY);
+  if (original === null || catalog.preferences?.mode !== "writable") return;
+  let values;
+  try { values = JSON.parse(original); } catch (_) { return; }
+  if (!Array.isArray(values)) return;
+  const migrations = [];
+  for (const subject of values) {
+    if (!String(subject).startsWith("announcement:")) continue;
+    const name = String(subject).slice("announcement:".length);
+    const matches = catalogServicesForLegacyName(name);
+    if (matches.length === 1) migrations.push({ subject, serviceId: matches[0].id });
+  }
+  if (!migrations.length) return;
+
+  // Preserve byte-for-byte legacy input before the first schema-1 mutation.
+  const priorBackup = localStorage.getItem(LEGACY_WATCHED_BACKUP_KEY);
+  if (priorBackup === null) {
+    localStorage.setItem(LEGACY_WATCHED_BACKUP_KEY, original);
+  } else if (priorBackup !== original) {
+    localStorage.setItem(`${LEGACY_WATCHED_BACKUP_KEY}-${Date.now()}`, original);
+  }
+  try {
+    for (const migration of migrations) {
+      const existing = preferenceForService(migration.serviceId);
+      catalog.preferences = await invoke("catalog_set_service_preference", {
+        service_id: migration.serviceId,
+        expected_revision: catalog.preferences.revision,
+        favorite: true,
+        friendly_alias: existing?.friendly_alias ?? null,
+      });
+    }
+  } catch (error) {
+    // The original key remains byte-identical. The backup also remains even if
+    // an earlier idempotent daemon commit completed before this failure.
+    throw new Error(`recovery_required: legacy favorites remain unchanged — ${error}`);
+  }
+  catalog.snapshot = await invoke("catalog_snapshot");
+  const migrated = new Set(migrations.map((item) => item.subject));
+  const unmatched = values.filter((subject) => !migrated.has(subject));
+  localStorage.setItem(LEGACY_WATCHED_KEY, JSON.stringify(unmatched));
+  feed.watched = new Set(unmatched);
+  syncFavoriteSubjects();
+}
+
+async function loadCatalogPreferences() {
+  if (!invoke) return;
+  try {
+    const [snapshot, preferences] = await Promise.all([
+      invoke("catalog_snapshot"),
+      invoke("catalog_preferences"),
+    ]);
+    catalog.snapshot = snapshot;
+    catalog.preferences = preferences;
+    if (preferences.mode !== "writable") {
+      const problem = preferences.problem;
+      throw new Error(`${problem?.error || "recovery_required"}: ${problem?.message || "preferences are read-only"}`);
+    }
+    await migrateLegacyWatched();
+    syncFavoriteSubjects();
+    renderAllGroups();
+    invoke("catalog_start").catch((error) => dlog(`catalog_start failed: ${error}`));
+  } catch (error) {
+    catalog.error = String(error);
+    note(`Catalog compatibility: ${catalog.error}`, true);
+    dlog(`catalog/preferences unavailable: ${error}`);
+  }
+}
+
 function feedNotify() {
   feed.degraded = feed.rows
     .filter((r) => r.tone === "bad" || r.tone === "warn")
@@ -739,6 +907,7 @@ function feedNotify() {
 }
 
 function feedAdmit(entry) {
+  entry = { ...entry, subject: durableSubject(entry.subject) };
   // Care follows every lifecycle event, even when the diary compacts a rapid
   // restart storm into one flapping row below.
   if (entry.kind === "runtime.stopped") {
@@ -775,16 +944,28 @@ function feedAdmit(entry) {
 }
 
 function feedWatchedSave() {
-  localStorage.setItem("koi-watched", JSON.stringify([...feed.watched]));
+  const legacyOnly = [...feed.watched]
+    .filter((subject) => !String(subject).startsWith("service:"));
+  localStorage.setItem(LEGACY_WATCHED_KEY, JSON.stringify(legacyOnly));
 }
 
 function feedPin(subject) {
+  if (String(subject).startsWith("service:")) {
+    setCatalogFavorite(String(subject).slice("service:".length), true)
+      .catch((error) => note(String(error), true));
+    return;
+  }
   feed.watched.add(subject);
   feedWatchedSave();
   feedNotify();
 }
 
 function feedUnpin(subject) {
+  if (String(subject).startsWith("service:")) {
+    setCatalogFavorite(String(subject).slice("service:".length), false)
+      .catch((error) => note(String(error), true));
+    return;
+  }
   feed.watched.delete(subject);
   feedWatchedSave();
   feedNotify();
@@ -796,6 +977,7 @@ function feedUnpin(subject) {
 const notifiedFades = new Set();
 
 function watchedFade(subject, line) {
+  subject = durableSubject(subject);
   if (!feed.watched.has(subject) || notifiedFades.has(subject)) return;
   notifiedFades.add(subject);
   if (!invoke) { dlog(`fade (watched): ${line}`); return; }
@@ -804,6 +986,7 @@ function watchedFade(subject, line) {
 }
 
 function watchedAlive(subject) {
+  subject = durableSubject(subject);
   if (notifiedFades.has(subject)) notifiedFades.delete(subject);
 }
 
@@ -888,7 +1071,7 @@ function renderGlance() {
     const b = document.createElement("button");
     b.className = "hero-pin";
     b.type = "button";
-    b.textContent = "📌 " + subject;
+    b.textContent = "📌 " + watchedLabel(subject);
     b.addEventListener("click", () => feedUnpin(subject));
     glance["glance-pins"].appendChild(b);
   }
@@ -1998,7 +2181,7 @@ if (window.__TAURI__?.event?.listen) {
       const b = document.createElement("button");
       b.className = "hero-pin";
       b.type = "button";
-      b.textContent = "📌 " + subject;
+      b.textContent = "📌 " + watchedLabel(subject);
       b.addEventListener("click", () => feedUnpin(subject));
       heroPins.appendChild(b);
     }
@@ -2034,13 +2217,14 @@ if (window.__TAURI__?.event?.listen) {
       line.className = "line";
       line.textContent = row.line;
       const pin = document.createElement("button");
-      pin.className = "pin" + (feed.watched.has(row.subject) ? " pinned" : "");
+      const watchedSubject = durableSubject(row.subject);
+      pin.className = "pin" + (feed.watched.has(watchedSubject) ? " pinned" : "");
       pin.type = "button";
-      pin.title = feed.watched.has(row.subject) ? "unpin" : "pin to the hero";
-      pin.textContent = feed.watched.has(row.subject) ? "★" : "☆";
+      pin.title = feed.watched.has(watchedSubject) ? "unpin" : "pin to the hero";
+      pin.textContent = feed.watched.has(watchedSubject) ? "★" : "☆";
       pin.addEventListener("click", (e) => {
         e.stopPropagation();
-        feed.watched.has(row.subject) ? feedUnpin(row.subject) : feedPin(row.subject);
+        feed.watched.has(watchedSubject) ? feedUnpin(watchedSubject) : feedPin(watchedSubject);
       });
       div.append(ago, line, pin);
       // Click-through is the view registry's target (B3): the sentence
@@ -2165,7 +2349,34 @@ el2["txt-clear"]?.addEventListener("click", () => {
 });
 el2["dns-refresh"]?.addEventListener("click", loadDns);
 
+if (window.__TAURI__?.event?.listen) {
+  window.__TAURI__.event.listen("catalog-snapshot", async (event) => {
+    catalog.snapshot = event.payload;
+    try {
+      catalog.preferences = await invoke("catalog_preferences");
+      if (catalog.preferences.mode !== "writable") {
+        const problem = catalog.preferences.problem;
+        catalog.error = `${problem?.error || "recovery_required"}: ${problem?.message || "preferences are read-only"}`;
+      } else {
+        catalog.error = null;
+      }
+    } catch (error) {
+      catalog.error = String(error);
+    }
+    syncFavoriteSubjects();
+    renderAllGroups();
+  });
+  window.__TAURI__.event.listen("catalog-error", (event) => {
+    catalog.error = String(event.payload || "catalog stream unavailable");
+    dlog(catalog.error);
+    if (catalog.error.includes("unsupported_schema")) {
+      note(`Catalog compatibility: ${catalog.error}`, true);
+    }
+  });
+}
+
 armCard();
+loadCatalogPreferences();
 startDiscover();
 invoke?.("status_events_start");
 refreshStatus();

@@ -125,6 +125,39 @@ test("feed: watched pins persist and unpin", async () => {
   assert.equal(probe(ctx, "feed.watched.size"), 0);
 });
 
+test("preferences: favorites use stable IDs and never return to legacy storage", async () => {
+  const { ctx } = await boot();
+  probe(ctx, `
+    catalog.preferences = {
+      mode: "writable", revision: 2,
+      services: [{service_key:{kind:"koi_service", id:"svc_one"}, favorite:true}]
+    };
+    feed.watched.add("announcement:unmatched");
+    syncFavoriteSubjects();
+    feedWatchedSave();
+  `);
+  assert.equal(
+    probe(ctx, "JSON.stringify([...feed.watched].sort())"),
+    JSON.stringify(["announcement:unmatched", "service:svc_one"]),
+  );
+  assert.equal(
+    probe(ctx, `localStorage.getItem("koi-watched")`),
+    JSON.stringify(["announcement:unmatched"]),
+    "the durable stable-ID favorite is not duplicated into localStorage",
+  );
+});
+
+test("preferences: same-named services remain ambiguous for legacy migration", async () => {
+  const { ctx } = await boot();
+  probe(ctx, `catalog.snapshot = {services: [
+    {id:"svc_one", observations:[{raw_reference:{name:"Printer", service_type:"_ipp._tcp.local."}}]},
+    {id:"svc_two", observations:[{raw_reference:{name:"Printer", service_type:"_ipp._tcp.local."}}]}
+  ]}`);
+  assert.equal(probe(ctx, `catalogServicesForLegacyName("Printer").length`), 2);
+  assert.equal(probe(ctx, `catalogServiceForRecord({name:"Printer", service_type:"_ipp._tcp.local."})`), null);
+  assert.equal(probe(ctx, `durableSubject("announcement:Printer")`), "announcement:Printer");
+});
+
 test("glance: hero is attention → watched → quiet, in that order", async () => {
   const { ctx, document } = await boot();
   const word = () => document.getElementById("glance-word").textContent;
