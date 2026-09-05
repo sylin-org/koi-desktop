@@ -9,6 +9,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod local_daemon;
+#[cfg(target_os = "linux")]
+mod native_motion;
 mod renderer_probe;
 #[cfg(target_os = "linux")]
 mod service_manager;
@@ -2035,6 +2037,10 @@ fn build_workbench(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri
         config.title = "Koi — R06 renderer evaluation".into();
     }
     let window = WebviewWindowBuilder::from_config(app, &config)?.build()?;
+    #[cfg(target_os = "linux")]
+    if renderer_probe::enabled() {
+        native_motion::attach(&window)?;
+    }
     window.show()?;
     Ok(window)
 }

@@ -135,7 +135,7 @@ invocation only reveals the existing instance and cannot change its mode.
 Normal launches and autostart continue to use the existing workbench.
 
 The shared renderer and authenticated client are Git-pinned to Koi
-`d2f6645ad699fa511348dd0e9f4ec312fe65e6f7`; no sibling checkout is required.
+`72cb286f7c4b4c285893693a58fdebcf896a1538`; no sibling checkout is required.
 Run `cargo test --locked`, `cargo clippy --locked --all-targets -- -D warnings`
 and `cargo build --locked --release`, then install the native package before
 collecting deployment evidence. The internal `koi-renderer` protocol reads one
@@ -143,6 +143,13 @@ real local catalog snapshot in Rust, embeds the original assets and serves a
 script-free document. It opens no HTTP listener and exposes no credential to
 JavaScript. Unsupported routes are rejected before reading the daemon. A missing
 or incompatible catalog produces an unavailable page, never fixture rows.
+
+On Linux the evaluation also observes the webview's actual GTK animation setting.
+When disabled, an owned WebKit user stylesheet applies the shared motion-safe rules;
+re-enabling removes only that stylesheet. This covers native media-query propagation
+failures without JavaScript or changing the normal workbench. Test the actual
+`GtkSettings:gtk-enable-animations` value: an XSettings dump alone is not evidence
+of the preference received by a Wayland GTK process.
 
 This static, read-only view evaluates native rendering, not live updates or
 shipping shell acceptance. It does not select a renderer or enable Pond. Finish
