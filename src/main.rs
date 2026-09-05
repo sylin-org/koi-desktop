@@ -9,6 +9,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod local_daemon;
+mod renderer_probe;
 #[cfg(target_os = "linux")]
 mod service_manager;
 
@@ -78,7 +79,7 @@ fn run() -> Result<()> {
     let close_tray_available = Arc::clone(&workbench.tray_available);
 
     let app = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tauri::Builder::default()
+        renderer_probe::register(tauri::Builder::default())
             .manage(OnDemandDaemon::default())
             .plugin(
                 tauri_plugin_autostart::Builder::new()
@@ -2016,7 +2017,7 @@ fn show_workbench(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
 }
 
 fn build_workbench(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri::Error> {
-    let config = app
+    let mut config = app
         .config()
         .app
         .windows
@@ -2024,6 +2025,15 @@ fn build_workbench(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri
         .find(|config| config.label == MAIN_WINDOW)
         .cloned()
         .ok_or_else(|| tauri::Error::WindowNotFound)?;
+    if renderer_probe::enabled() {
+        config.url = tauri::WebviewUrl::CustomProtocol(
+            renderer_probe::URL
+                .parse()
+                .expect("static evaluation URL is valid"),
+        );
+        config.min_width = Some(320.0);
+        config.title = "Koi — R06 renderer evaluation".into();
+    }
     let window = WebviewWindowBuilder::from_config(app, &config)?.build()?;
     window.show()?;
     Ok(window)

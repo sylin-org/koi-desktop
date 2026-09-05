@@ -126,3 +126,26 @@ Pond is a separately armed, read-only router inside the one Koi daemon. Phone
 publishes the fixed browser bundle, asks Koi to acquire the derived fourth port,
 and displays the exact URL Koi reports. Stop sharing disarms it; restarting Koi
 restores an enabled intent and continues reconciliation.
+
+### Temporary R06 renderer evaluation
+
+The explicit `koi-desktop --renderer-probe` flag loads the Maud candidate into
+the existing singleton main window. Quit the current workbench first; an extra
+invocation only reveals the existing instance and cannot change its mode.
+Normal launches and autostart continue to use the existing workbench.
+
+The shared renderer and authenticated client are Git-pinned to Koi
+`d2f6645ad699fa511348dd0e9f4ec312fe65e6f7`; no sibling checkout is required.
+Run `cargo test --locked`, `cargo clippy --locked --all-targets -- -D warnings`
+and `cargo build --locked --release`, then install the native package before
+collecting deployment evidence. The internal `koi-renderer` protocol reads one
+real local catalog snapshot in Rust, embeds the original assets and serves a
+script-free document. It opens no HTTP listener and exposes no credential to
+JavaScript. Unsupported routes are rejected before reading the daemon. A missing
+or incompatible catalog produces an unavailable page, never fixture rows.
+
+This static, read-only view evaluates native rendering, not live updates or
+shipping shell acceptance. It does not select a renderer or enable Pond. Finish
+by quitting the evaluation and launching the same installed executable without
+the flag; check that one normal workbench and one healthy daemon remain. Keep an
+exact prior native package and an interruption-safe restore path before upgrades.
