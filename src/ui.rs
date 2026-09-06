@@ -3,6 +3,7 @@
 use koi_client::KoiClient;
 use koi_ui::{Links, View};
 use tauri::http::{Method, Request, Response, StatusCode};
+use tauri::Manager;
 
 const SCHEME: &str = "koi-ui";
 pub const URL: &str = "koi-ui://localhost/";
@@ -17,14 +18,22 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         // Never block the webview thread on local-control I/O. The existing client
         // owns discovery, authentication, timeouts and schema validation.
         tauri::async_runtime::spawn_blocking(move || {
+            let intent = koi_ui::home::HomeRequest::parse(request.uri().query().unwrap_or(""))
+                .expect("allowed request validated Home intent");
+            let query = intent.query();
+            let refresh = query.href(query.selected);
+            let links = Links {
+                refresh: Some(&refresh),
+                ..links()
+            };
             let (status, document) = match read_catalog() {
                 Ok(catalog) => (
                     StatusCode::OK,
-                    koi_ui::render(View::Snapshot(&catalog), links()),
+                    koi_ui::render_home(View::Snapshot(&catalog), links, &query),
                 ),
                 Err(_) => (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    koi_ui::render(View::Unavailable, links()),
+                    koi_ui::render_home(View::Unavailable, links, &query),
                 ),
             };
             responder.respond(response(status, document));
@@ -90,8 +99,43 @@ fn allowed(label: &str, request: &Request<Vec<u8>>) -> bool {
         && request.method() == Method::GET
         && local_origin
         && uri.path() == "/"
-        && uri.query().is_none()
+        && koi_ui::home::HomeRequest::parse(uri.query().unwrap_or("")).is_ok()
         && request.body().is_empty()
+}
+
+/// Keep real service URLs inspectable while opening them outside the workbench.
+pub fn navigate(app: &tauri::AppHandle, url: &tauri::Url) -> bool {
+    if internal_navigation(url) {
+        return true;
+    }
+    if koi_ui::home::BrowserDestination::parse(url.as_str()).is_some() {
+        let app = app.clone();
+        let url = url.to_string();
+        tauri::async_runtime::spawn_blocking(move || {
+            let message = match crate::external::open(&url) {
+                Ok(()) => {
+                    "Browser launch requested. This does not verify the destination.".to_string()
+                }
+                Err(error) => format!("Could not open the browser: {error}"),
+            };
+            if let Some(window) = app.get_webview_window(crate::MAIN_WINDOW) {
+                let text = serde_json::to_string(&message).expect("string serializes");
+                let _ = window.eval(format!("(() => {{ const status = document.getElementById('open-status'); if (status) status.textContent = {text}; }})()"));
+            }
+        });
+    }
+    false
+}
+
+fn internal_navigation(url: &tauri::Url) -> bool {
+    url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && matches!(
+            (url.scheme(), url.host_str()),
+            ("koi-ui" | "tauri", Some("localhost"))
+                | ("http", Some("koi-ui.localhost" | "tauri.localhost"))
+        )
 }
 
 fn response(status: StatusCode, document: String) -> Response<Vec<u8>> {
@@ -121,6 +165,13 @@ mod tests {
     fn only_exact_native_shared_shell_roots_are_allowed() {
         for url in [URL, "http://koi-ui.localhost/"] {
             assert!(allowed(crate::MAIN_WINDOW, &request("GET", url)));
+            assert!(allowed(
+                crate::MAIN_WINDOW,
+                &request(
+                    "GET",
+                    &format!("{url}?search=Office+web&selected=notes&favorites=1")
+                )
+            ));
         }
         for url in [
             "koi-ui://remote/",
@@ -134,6 +185,27 @@ mod tests {
             "/",
         ] {
             assert!(!allowed(crate::MAIN_WINDOW, &request("GET", url)), "{url}");
+        }
+    }
+
+    #[test]
+    fn service_destinations_cannot_replace_the_privileged_workbench() {
+        for url in [
+            URL,
+            ADVANCED_URL,
+            "http://koi-ui.localhost/?search=notes#service-details",
+        ] {
+            assert!(internal_navigation(&url.parse().unwrap()), "{url}");
+        }
+        for url in [
+            "https://notes.local:8443/",
+            "http://koi-ui.localhost.evil/",
+            "http://user@koi-ui.localhost/",
+            "http://koi-ui.localhost:8080/",
+            "javascript:alert(1)",
+            "file:///tmp/page",
+        ] {
+            assert!(!internal_navigation(&url.parse().unwrap()), "{url}");
         }
     }
 

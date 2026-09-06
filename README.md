@@ -130,13 +130,15 @@ restores an enabled intent and continues reconciliation.
 ### Shared Rust shell
 
 Normal launch and autostart use the production Maud shell in `koi-ui`, pinned
-alongside `koi-client` to Koi `b4c32fa9b524549509b34b01bb24cc06455407ad`.
+alongside `koi-client` to Koi `267be185297671d4f4892e99c7ec3ef040b8df73`.
 No sibling checkout or renderer-selection flag is needed. The existing singleton,
 tray, authenticated local-control handoff and native motion boundary are retained.
 
-The internal `koi-ui` protocol admits only the exact main-window root. Rust reads
+The internal `koi-ui` protocol admits only the exact main-window root and bounded
+search/favorite/selection query fields. Rust reads
 one schema-checked authenticated catalog, renders a dated snapshot and embeds its
-original assets. Refresh rereads the complete snapshot. No additional HTTP listener
+original assets. Refresh rereads the complete snapshot with submitted filters and
+selection intact. No additional HTTP listener
 or desktop credential in JavaScript. A failed read is unavailable, never empty.
 
 Home / Devices / Settings / About share Rust components with the daemon's
@@ -153,9 +155,11 @@ External Open validates a complete HTTP(S) URL without embedded credentials,
 control characters or ambiguous authority syntax. Windows invokes the native
 browser association directly, never a command interpreter; Linux/macOS pass one
 URL argument to their native launcher. Acceptance by a launcher is not a promise
-that the remote page is reachable or trusted. R07's shared search/selection and
-destination helpers are present, but interactive Home/reconnect wiring remains
-in progress; this foundation update does not claim those controls are available.
+that the remote page is reachable or trusted. Home now supports submitted search,
+favorite filtering, stable selection and wide/narrow service details. Its inspectable
+Open links are intercepted at native navigation and cannot replace the privileged
+workbench with a remote page. API-only/absent services retain connection details.
+Automatic updates/reconnect and installed journey acceptance remain R07 work.
 The read-only Pond bundle retains its existing public projection; it does not
 receive the operator catalog.
 

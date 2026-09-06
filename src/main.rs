@@ -2009,7 +2009,10 @@ fn build_workbench(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri
     config.url = tauri::WebviewUrl::CustomProtocol(
         ui::URL.parse().expect("static shared shell URL is valid"),
     );
-    let window = WebviewWindowBuilder::from_config(app, &config)?.build()?;
+    let navigation_app = app.clone();
+    let window = WebviewWindowBuilder::from_config(app, &config)?
+        .on_navigation(move |url| ui::navigate(&navigation_app, url))
+        .build()?;
     #[cfg(target_os = "linux")]
     native_motion::attach(&window)?;
     window.show()?;
