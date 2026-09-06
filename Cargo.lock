@@ -2099,7 +2099,7 @@ dependencies = [
 [[package]]
 name = "koi-client"
 version = "1.0.0-dev.0"
-source = "git+https://github.com/sylin-org/koi?rev=72cb286f7c4b4c285893693a58fdebcf896a1538#72cb286f7c4b4c285893693a58fdebcf896a1538"
+source = "git+https://github.com/sylin-org/koi?rev=b4c32fa9b524549509b34b01bb24cc06455407ad#b4c32fa9b524549509b34b01bb24cc06455407ad"
 dependencies = [
  "hickory-proto",
  "koi-common",
@@ -2113,7 +2113,7 @@ dependencies = [
 [[package]]
 name = "koi-common"
 version = "1.0.0-dev.0"
-source = "git+https://github.com/sylin-org/koi?rev=72cb286f7c4b4c285893693a58fdebcf896a1538#72cb286f7c4b4c285893693a58fdebcf896a1538"
+source = "git+https://github.com/sylin-org/koi?rev=b4c32fa9b524549509b34b01bb24cc06455407ad#b4c32fa9b524549509b34b01bb24cc06455407ad"
 dependencies = [
  "async-trait",
  "axum",
@@ -2133,7 +2133,7 @@ dependencies = [
 [[package]]
 name = "koi-config"
 version = "1.0.0-dev.0"
-source = "git+https://github.com/sylin-org/koi?rev=72cb286f7c4b4c285893693a58fdebcf896a1538#72cb286f7c4b4c285893693a58fdebcf896a1538"
+source = "git+https://github.com/sylin-org/koi?rev=b4c32fa9b524549509b34b01bb24cc06455407ad#b4c32fa9b524549509b34b01bb24cc06455407ad"
 dependencies = [
  "koi-common",
  "serde",
@@ -2151,7 +2151,7 @@ dependencies = [
  "base64 0.22.1",
  "gtk",
  "koi-client",
- "koi-ui-spike",
+ "koi-ui",
  "qrcode",
  "serde",
  "serde_json",
@@ -2164,12 +2164,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "koi-ui-spike"
-version = "0.0.0"
-source = "git+https://github.com/sylin-org/koi?rev=72cb286f7c4b4c285893693a58fdebcf896a1538#72cb286f7c4b4c285893693a58fdebcf896a1538"
+name = "koi-ui"
+version = "1.0.0-dev.0"
+source = "git+https://github.com/sylin-org/koi?rev=b4c32fa9b524549509b34b01bb24cc06455407ad#b4c32fa9b524549509b34b01bb24cc06455407ad"
 dependencies = [
  "base64 0.22.1",
- "koi-client",
  "koi-common",
  "maud",
 ]

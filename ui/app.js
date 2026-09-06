@@ -10,6 +10,40 @@ const invoke = window.__TAURI__?.core?.invoke;
 // (ADR-035 mobile access). Read-only — mutations stay in the desktop app.
 const BROWSER_MODE = !invoke;
 
+// Native event registrations outlive a page unless explicitly released. Home /
+// Advanced navigation must not accumulate a new listener set on every visit.
+const workbenchListeners = new Set();
+const pendingListeners = new Set();
+let workbenchDisposed = false;
+function listenWorkbench(kind, handler) {
+  const pending = window.__TAURI__.event.listen(kind, event => {
+    if (!workbenchDisposed) handler(event);
+  }).then(async unlisten => {
+    if (workbenchDisposed) await unlisten();
+    else workbenchListeners.add(unlisten);
+  }).catch(() => dlog(`Cannot subscribe to ${kind}`));
+  pendingListeners.add(pending);
+  pending.finally(() => pendingListeners.delete(pending));
+}
+async function disposeWorkbenchListeners() {
+  workbenchDisposed = true;
+  const listeners = [...workbenchListeners];
+  workbenchListeners.clear();
+  await Promise.allSettled([...pendingListeners, ...listeners.map(unlisten => unlisten())]);
+}
+window.addEventListener("pagehide", disposeWorkbenchListeners);
+
+// This legacy tool surface retains its original asset origin and stored-state
+// migration. The Rust shared shell is the normal entry; Pond has no native door.
+const sharedShellHome = document.getElementById("shared-shell-home");
+if (invoke && sharedShellHome) {
+  sharedShellHome.hidden = false;
+  sharedShellHome.addEventListener("click", async () => {
+    await disposeWorkbenchListeners();
+    invoke("show_shared_shell").catch(() => note("Cannot open Home. Reopen the workbench to resume live updates.", true));
+  });
+}
+
 // ── debug sink: milestones + every failure path, to disk via Rust ────
 function dlog(message) {
   try { invoke?.("debug_log", { message }); } catch {}
@@ -686,7 +720,7 @@ async function startDiscover() {
 }
 
 if (window.__TAURI__?.event?.listen) {
-  window.__TAURI__.event.listen("mdns-event", (event) => {
+  listenWorkbench("mdns-event", (event) => {
     const payload = event.payload ?? {};
     switch (payload.kind) {
       case "resolved": {
@@ -2150,12 +2184,12 @@ function inviteMachine(name) {
 
 if (window.__TAURI__?.event?.listen) {
   // The Rust reader owns the real stream state; the UI never invents "live".
-  window.__TAURI__.event.listen("discover-stream", (event) => {
+  listenWorkbench("discover-stream", (event) => {
     streamState = String(event.payload ?? "connecting");
     updateDiscoverTiles();
   });
   // The lamp: pushed by the Rust reader on /v1/events connect + heartbeats.
-  window.__TAURI__.event.listen("daemon-status", (event) => {
+  listenWorkbench("daemon-status", (event) => {
     let svc = { installed: false, running: false };
     // SCM state is cheap and local; refresh alongside each push.
     invoke("service_status").then((s) => { svc = s ?? svc; }).catch(() => {})
@@ -2241,13 +2275,13 @@ if (window.__TAURI__?.event?.listen) {
   // Domain events: forwarded wire events (dns.*, certmesh.*, mdns.* …).
   // A loopback poke (127.0.0.1:5640/poke) means something local just changed
   // the daemon's world (Run once, install, a script) — re-read everything now.
-  window.__TAURI__.event.listen("ui-poked", () => {
+  listenWorkbench("ui-poked", () => {
     dlog("poked: re-reading the network");
     lastStatus = "";
     refreshStatus();
     seedSnapshot();
   });
-  window.__TAURI__.event.listen("daemon-event", (event) => {
+  listenWorkbench("daemon-event", (event) => {
     const payload = event.payload ?? {};
     const kind = String(payload.kind ?? "");
     if (!kind) return;
@@ -2350,7 +2384,7 @@ el2["txt-clear"]?.addEventListener("click", () => {
 el2["dns-refresh"]?.addEventListener("click", loadDns);
 
 if (window.__TAURI__?.event?.listen) {
-  window.__TAURI__.event.listen("catalog-snapshot", async (event) => {
+  listenWorkbench("catalog-snapshot", async (event) => {
     catalog.snapshot = event.payload;
     try {
       catalog.preferences = await invoke("catalog_preferences");
@@ -2366,7 +2400,7 @@ if (window.__TAURI__?.event?.listen) {
     syncFavoriteSubjects();
     renderAllGroups();
   });
-  window.__TAURI__.event.listen("catalog-error", (event) => {
+  listenWorkbench("catalog-error", (event) => {
     catalog.error = String(event.payload || "catalog stream unavailable");
     dlog(catalog.error);
     if (catalog.error.includes("unsupported_schema")) {

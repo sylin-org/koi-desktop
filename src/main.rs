@@ -11,9 +11,9 @@
 mod local_daemon;
 #[cfg(target_os = "linux")]
 mod native_motion;
-mod renderer_probe;
 #[cfg(target_os = "linux")]
 mod service_manager;
+mod ui;
 
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,7 +81,7 @@ fn run() -> Result<()> {
     let close_tray_available = Arc::clone(&workbench.tray_available);
 
     let app = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        renderer_probe::register(tauri::Builder::default())
+        ui::register(tauri::Builder::default())
             .manage(OnDemandDaemon::default())
             .plugin(
                 tauri_plugin_autostart::Builder::new()
@@ -90,6 +90,7 @@ fn run() -> Result<()> {
             )
             .plugin(tauri_plugin_notification::init())
             .invoke_handler(tauri::generate_handler![
+                ui::show_shared_shell,
                 service_status,
                 service_start,
                 service_stop,
@@ -2027,20 +2028,12 @@ fn build_workbench(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri
         .find(|config| config.label == MAIN_WINDOW)
         .cloned()
         .ok_or_else(|| tauri::Error::WindowNotFound)?;
-    if renderer_probe::enabled() {
-        config.url = tauri::WebviewUrl::CustomProtocol(
-            renderer_probe::URL
-                .parse()
-                .expect("static evaluation URL is valid"),
-        );
-        config.min_width = Some(320.0);
-        config.title = "Koi — R06 renderer evaluation".into();
-    }
+    config.url = tauri::WebviewUrl::CustomProtocol(
+        ui::URL.parse().expect("static shared shell URL is valid"),
+    );
     let window = WebviewWindowBuilder::from_config(app, &config)?.build()?;
     #[cfg(target_os = "linux")]
-    if renderer_probe::enabled() {
-        native_motion::attach(&window)?;
-    }
+    native_motion::attach(&window)?;
     window.show()?;
     Ok(window)
 }

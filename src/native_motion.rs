@@ -1,4 +1,4 @@
-//! GTK preference fallback for the R06 evaluation's WebKit media-query gap.
+//! GTK preference fallback for the shared shell's WebKit media-query gap.
 //! Reads the toolkit's actual value, not a desktop-specific config imitation.
 use std::cell::{Cell, RefCell};
 
@@ -19,7 +19,7 @@ pub fn attach(window: &tauri::WebviewWindow) -> tauri::Result<()> {
             return;
         };
         let stylesheet = UserStyleSheet::new(
-            koi_ui_spike::REDUCED_MOTION_CSS,
+            koi_ui::REDUCED_MOTION_CSS,
             UserContentInjectedFrames::TopFrame,
             UserStyleLevel::User,
             &[],

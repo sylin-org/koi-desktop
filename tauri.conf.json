@@ -14,7 +14,7 @@
         "title": "Koi",
         "width": 1100,
         "height": 720,
-        "minWidth": 820,
+        "minWidth": 320,
         "minHeight": 560,
         "center": true,
         "create": false,

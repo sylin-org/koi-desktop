@@ -27,6 +27,40 @@ async function boot() {
 
 const settle = () => new Promise((r) => setImmediate(r));
 
+test("advanced navigation releases registered and late native event listeners", async () => {
+  const { ctx } = await boot();
+  probe(ctx, `
+    window.released = 0;
+    window.__TAURI__ = { event: { listen: async () => () => { window.released++; } } };
+    listenWorkbench('ready', () => {});
+  `);
+  await settle();
+  probe(ctx, `
+    window.__TAURI__.event.listen = () => new Promise(resolve => { window.finishListen = resolve; });
+    listenWorkbench('late', () => {});
+    window.disposing = disposeWorkbenchListeners();
+    window.finishListen(() => { window.released++; });
+  `);
+  await probe(ctx, 'window.disposing');
+  assert.equal(probe(ctx, 'window.released'), 2);
+  await probe(ctx, 'disposeWorkbenchListeners()');
+  assert.equal(probe(ctx, 'window.released'), 2);
+});
+
+test("shared shell is the normal native entry and advanced storage keeps its asset origin", () => {
+  const rust = readFileSync(new URL("../src/main.rs", import.meta.url), "utf8");
+  const adapter = readFileSync(new URL("../src/ui.rs", import.meta.url), "utf8");
+  const app = readFileSync(new URL("app.js", import.meta.url), "utf8");
+  const html = readFileSync(new URL("index.html", import.meta.url), "utf8");
+  assert.match(rust, /ui::register\(tauri::Builder::default\(\)\)/);
+  assert.match(rust, /ui::URL.parse\(\)/);
+  assert.doesNotMatch(rust, /renderer_probe/);
+  assert.match(adapter, /tauri:\/\/localhost\//);
+  assert.match(adapter, /http:\/\/tauri.localhost\//);
+  assert.match(app, /invoke\("show_shared_shell"\)/);
+  assert.match(html, /id="shared-shell-home"[^>]*hidden/);
+});
+
 test("browser bundle: machine-local data root is neither disclosed nor shown", () => {
   const html = readFileSync(new URL("index.html", import.meta.url), "utf8");
   const css = readFileSync(new URL("styles.css", import.meta.url), "utf8");

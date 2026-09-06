@@ -1,22 +1,14 @@
-//! Temporary R06 candidate evaluation, never the default/autostart surface.
-//! The shared document and authenticated catalog stay entirely in Rust.
+//! Normal shared shell. The authenticated catalog and rendered document stay in Rust.
 
 use koi_client::KoiClient;
-use koi_ui_spike::{maud_view, View};
+use koi_ui::{Links, View};
 use tauri::http::{Method, Request, Response, StatusCode};
 
-const SCHEME: &str = "koi-renderer";
-pub const URL: &str = "koi-renderer://localhost/";
-const CSP: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-
-pub fn enabled() -> bool {
-    std::env::args().any(|arg| arg == "--renderer-probe")
-}
+const SCHEME: &str = "koi-ui";
+pub const URL: &str = "koi-ui://localhost/";
+const CSP: &str = koi_ui::DOCUMENT_CSP;
 
 pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-    if !enabled() {
-        return builder;
-    }
     builder.register_asynchronous_uri_scheme_protocol(SCHEME, |context, request, responder| {
         if !allowed(context.webview_label(), &request) {
             responder.respond(response(StatusCode::NOT_FOUND, String::new()));
@@ -25,17 +17,49 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         // Never block the webview thread on local-control I/O. The existing client
         // owns discovery, authentication, timeouts and schema validation.
         tauri::async_runtime::spawn_blocking(move || {
-            let (status, document) =
-                match KoiClient::from_local().and_then(|client| client.catalog_snapshot()) {
-                    Ok(catalog) => (StatusCode::OK, maud_view::render(View::Snapshot(&catalog))),
-                    Err(_) => (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        maud_view::render(View::Unavailable),
-                    ),
-                };
+            let (status, document) = match read_catalog() {
+                Ok(catalog) => (
+                    StatusCode::OK,
+                    koi_ui::render(View::Snapshot(&catalog), links()),
+                ),
+                Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    koi_ui::render(View::Unavailable, links()),
+                ),
+            };
             responder.respond(response(status, document));
         });
     })
+}
+
+// Keep the advanced asset origin unchanged so its local storage/migration survives.
+#[cfg(windows)]
+const ADVANCED_URL: &str = "http://tauri.localhost/";
+#[cfg(not(windows))]
+const ADVANCED_URL: &str = "tauri://localhost/";
+
+fn links() -> Links<'static> {
+    Links {
+        refresh: Some("./"),
+        advanced: ADVANCED_URL,
+    }
+}
+
+fn read_catalog() -> Result<koi_ui::CatalogSnapshot, String> {
+    let access = crate::local_daemon::discover()?;
+    KoiClient::with_token(&access.endpoint, &access.token)
+        .catalog_snapshot()
+        .map_err(|_| "catalog unavailable".into())
+}
+
+#[tauri::command]
+pub fn show_shared_shell(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != crate::MAIN_WINDOW {
+        return Err("unknown workbench".into());
+    }
+    window
+        .navigate(URL.parse().expect("static shared shell URL"))
+        .map_err(|_| "cannot open the shared shell".into())
 }
 
 fn allowed(label: &str, request: &Request<Vec<u8>>) -> bool {
@@ -45,7 +69,7 @@ fn allowed(label: &str, request: &Request<Vec<u8>>) -> bool {
             uri.scheme_str(),
             uri.authority().map(|value| value.as_str())
         ),
-        (Some("koi-renderer"), Some("localhost")) | (Some("http"), Some("koi-renderer.localhost"))
+        (Some("koi-ui"), Some("localhost")) | (Some("http"), Some("koi-ui.localhost"))
     );
     label == crate::MAIN_WINDOW
         && request.method() == Method::GET
@@ -79,19 +103,19 @@ mod tests {
     }
 
     #[test]
-    fn only_exact_native_evaluation_roots_are_allowed() {
-        for url in [URL, "http://koi-renderer.localhost/"] {
+    fn only_exact_native_shared_shell_roots_are_allowed() {
+        for url in [URL, "http://koi-ui.localhost/"] {
             assert!(allowed(crate::MAIN_WINDOW, &request("GET", url)));
         }
         for url in [
-            "koi-renderer://remote/",
-            "koi-renderer://localhost:80/",
-            "koi-renderer://user@localhost/",
-            "koi-renderer://localhost/assets/koi.png",
-            "koi-renderer://localhost/?path=/etc/passwd",
-            "koi-renderer://localhost/../",
+            "koi-ui://remote/",
+            "koi-ui://localhost:80/",
+            "koi-ui://user@localhost/",
+            "koi-ui://localhost/assets/koi.png",
+            "koi-ui://localhost/?path=/etc/passwd",
+            "koi-ui://localhost/../",
             "http://localhost/",
-            "https://koi-renderer.localhost/",
+            "https://koi-ui.localhost/",
             "/",
         ] {
             assert!(!allowed(crate::MAIN_WINDOW, &request("GET", url)), "{url}");
@@ -113,7 +137,7 @@ mod tests {
     fn unavailable_document_is_safe_and_uncached() {
         let reply = response(
             StatusCode::SERVICE_UNAVAILABLE,
-            maud_view::render(View::Unavailable),
+            koi_ui::render(View::Unavailable, links()),
         );
         assert_eq!(reply.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(reply.headers()["cache-control"], "no-store");

@@ -127,32 +127,44 @@ publishes the fixed browser bundle, asks Koi to acquire the derived fourth port,
 and displays the exact URL Koi reports. Stop sharing disarms it; restarting Koi
 restores an enabled intent and continues reconciliation.
 
-### Temporary R06 renderer evaluation
+### Shared Rust shell
 
-The explicit `koi-desktop --renderer-probe` flag loads the Maud candidate into
-the existing singleton main window. Quit the current workbench first; an extra
-invocation only reveals the existing instance and cannot change its mode.
-Normal launches and autostart continue to use the existing workbench.
+Normal launch and autostart use the production Maud shell in `koi-ui`, pinned
+alongside `koi-client` to Koi `b4c32fa9b524549509b34b01bb24cc06455407ad`.
+No sibling checkout or renderer-selection flag is needed. The existing singleton,
+tray, authenticated local-control handoff and native motion boundary are retained.
 
-The shared renderer and authenticated client are Git-pinned to Koi
-`72cb286f7c4b4c285893693a58fdebcf896a1538`; no sibling checkout is required.
-Run `cargo test --locked`, `cargo clippy --locked --all-targets -- -D warnings`
-and `cargo build --locked --release`, then install the native package before
-collecting deployment evidence. The internal `koi-renderer` protocol reads one
-real local catalog snapshot in Rust, embeds the original assets and serves a
-script-free document. It opens no HTTP listener and exposes no credential to
-JavaScript. Unsupported routes are rejected before reading the daemon. A missing
-or incompatible catalog produces an unavailable page, never fixture rows.
+The internal `koi-ui` protocol admits only the exact main-window root. Rust reads
+one schema-checked authenticated catalog, renders a dated snapshot and embeds its
+original assets. Refresh rereads the complete snapshot. No additional HTTP listener
+or desktop credential in JavaScript. A failed read is unavailable, never empty.
 
-On Linux the evaluation also observes the webview's actual GTK animation setting.
-When disabled, an owned WebKit user stylesheet applies the shared motion-safe rules;
-re-enabling removes only that stylesheet. This covers native media-query propagation
-failures without JavaScript or changing the normal workbench. Test the actual
-`GtkSettings:gtk-enable-animations` value: an XSettings dump alone is not evidence
-of the preference received by a Wayland GTK process.
+Home / Devices / Settings / About share Rust components with the daemon's
+authenticated `/ui` operator view. Advanced tools opens the retained workbench at
+its unchanged Tauri asset origin, preserving local storage and its existing
+watched-item import. Its Home button returns to the shared shell and releases
+native event listeners, including registrations that finish during navigation.
+The read-only Pond bundle retains its existing public projection; it does not
+receive the operator catalog.
 
-This static, read-only view evaluates native rendering, not live updates or
-shipping shell acceptance. It does not select a renderer or enable Pond. Finish
-by quitting the evaluation and launching the same installed executable without
-the flag; check that one normal workbench and one healthy daemon remain. Keep an
-exact prior native package and an interruption-safe restore path before upgrades.
+Linux observes the actual GTK animation preference and applies/removes only its
+own shared reduction stylesheet. Media-query propagation is not assumed.
+MacOS remains physically unverified. See Koi's R06/shared-shell report for the
+new artifact's test and platform-acceptance status; old probe evidence is not a
+production-package pass.
+
+Checks:
+
+```sh
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
+cargo fmt --all --check
+node --test ui/app.test.mjs
+cargo build --locked --release
+```
+
+Shared component, hostile-input, authenticated HTTP and offline browser commands
+live in Koi's `crates/koi-ui/README.md`. Install through the native package recipe
+before collecting deployment evidence; keep a fresh exact prior package and an
+interruption-safe recovery guard. Historical renderer experiments remain
+reproducible at their immutable commits, not as an alternative product mode.
