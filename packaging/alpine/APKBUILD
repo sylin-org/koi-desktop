@@ -1,8 +1,8 @@
 # Maintainer: Sylin <hello@sylin.org>
 
 pkgname=koi-desktop
-pkgver=0.1.3_git20260905
-pkgrel=1
+pkgver=0.1.3_git20260906
+pkgrel=0
 pkgdesc="Koi's native network workbench"
 url="https://github.com/sylin-org/koi-desktop"
 arch="x86_64 aarch64"
@@ -21,7 +21,7 @@ checkdepends="desktop-file-utils nodejs"
 subpackages="$pkgname-doc"
 # Cargo fetches the locked crates and pinned Tao revision during local builds.
 options="net"
-_commit=ccee0fce1bb579e032a0aad2a8603f869b22a2b2
+_commit=e010086ef1ede16c4ab5dc3c6431fcbf82a9c715
 source="$pkgname-$_commit.tar.gz::$url/archive/$_commit.tar.gz"
 builddir="$srcdir/$pkgname-$_commit"
 
@@ -51,5 +51,5 @@ package() {
 }
 
 sha512sums="
-73613063683ca1a981d880e4db74ff74c44802dd786a65245ff7cf5b9e57f7bda1cf2f89f33a4e88800fb958120afa6c8d6fc26a6a239981fbe0a0c67874aafd  koi-desktop-ccee0fce1bb579e032a0aad2a8603f869b22a2b2.tar.gz
+63e267606730ba9356ec5da434c86fe8af27a0ad3b8a6f72630a2efbeedacbadb6207a5962a4290a106db75f4726fd042a6d16c16e3b892b5b9bcf975e4f5ca3  koi-desktop-e010086ef1ede16c4ab5dc3c6431fcbf82a9c715.tar.gz
 "
