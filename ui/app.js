@@ -15,6 +15,7 @@ const BROWSER_MODE = !invoke;
 const workbenchListeners = new Set();
 const pendingListeners = new Set();
 let workbenchDisposed = false;
+let workbenchDisposal;
 function listenWorkbench(kind, handler) {
   const pending = window.__TAURI__.event.listen(kind, event => {
     if (!workbenchDisposed) handler(event);
@@ -25,22 +26,52 @@ function listenWorkbench(kind, handler) {
   pendingListeners.add(pending);
   pending.finally(() => pendingListeners.delete(pending));
 }
-async function disposeWorkbenchListeners() {
+function disposeWorkbenchListeners() {
+  if (workbenchDisposal) return workbenchDisposal;
   workbenchDisposed = true;
   const listeners = [...workbenchListeners];
   workbenchListeners.clear();
-  await Promise.allSettled([...pendingListeners, ...listeners.map(unlisten => unlisten())]);
+  // A release may throw synchronously. Settle every owned release, and share
+  // the same completion with retries/pagehide instead of losing pending work.
+  workbenchDisposal = Promise.allSettled([
+    ...pendingListeners, ...listeners.map(unlisten => Promise.resolve().then(unlisten)),
+  ]);
+  return workbenchDisposal;
 }
 window.addEventListener("pagehide", disposeWorkbenchListeners);
 
 // This legacy tool surface retains its original asset origin and stored-state
 // migration. The Rust shared shell is the normal entry; Pond has no native door.
 const sharedShellHome = document.getElementById("shared-shell-home");
+const sharedShellError = document.getElementById("shared-shell-error");
+const HOME_CLEANUP_TIMEOUT_MS = 3000;
 if (invoke && sharedShellHome) {
   sharedShellHome.hidden = false;
   sharedShellHome.addEventListener("click", async () => {
-    await disposeWorkbenchListeners();
-    invoke("show_shared_shell").catch(() => note("Cannot open Home. Reopen the workbench to resume live updates.", true));
+    if (sharedShellHome.disabled) return;
+    sharedShellHome.disabled = true;
+    if (sharedShellError) sharedShellError.hidden = true;
+    let deadline;
+    try {
+      await Promise.race([
+        disposeWorkbenchListeners(),
+        new Promise((_, reject) => {
+          deadline = setTimeout(() => reject(new Error("listener cleanup timed out")), HOME_CLEANUP_TIMEOUT_MS);
+        }),
+      ]);
+      await invoke("show_shared_shell");
+    } catch (error) {
+      dlog(`Cannot open Home: ${error}`);
+      // This lives outside .view: failures must be visible from every pane.
+      if (sharedShellError) {
+        sharedShellError.textContent = "Cannot open Home. Try Home again, or reopen the workbench to resume live updates.";
+        sharedShellError.hidden = false;
+        document.getElementById("main-content").scrollTop = 0;
+      }
+      sharedShellHome.disabled = false;
+    } finally {
+      clearTimeout(deadline);
+    }
   });
 }
 
@@ -312,6 +343,8 @@ document.getElementById("refresh-status")?.addEventListener("click", () => { las
 
 // ── tabs ─────────────────────────────────────────────────────────────
 for (const tab of document.querySelectorAll(".tab")) {
+  // Home shares the tab styling but navigates the native window, not a pane.
+  if (!tab.dataset.view) continue;
   tab.addEventListener("click", () => {
     for (const t of document.querySelectorAll(".tab")) {
       t.classList.toggle("active", t === tab);

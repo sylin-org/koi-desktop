@@ -160,7 +160,7 @@ export function makeStorage() {
 // Fetch is a hard reject so a stray network touch fails the test instead of
 // silently passing; timers are collected, never fired; the clock is
 // controllable so same-millisecond event bursts are testable.
-export function loadWorkbench(uiRoot, files = ["sentences.js", "app.js"]) {
+export function loadWorkbench(uiRoot, files = ["sentences.js", "app.js"], setup = () => {}) {
   const { document } = makeDocument();
   const timers = [];
   let clock = 1_700_000_000_000;
@@ -193,6 +193,9 @@ export function loadWorkbench(uiRoot, files = ["sentences.js", "app.js"]) {
     })(),
     __advanceClock: (ms) => { clock += Number(ms); },
   };
+  // Tests may install a native bridge and actual navigation elements before
+  // composition-root registration. Browser-only tests keep their old defaults.
+  setup(globals);
   const ctx = vm.createContext(globals);
   for (const f of files) {
     vm.runInContext(fs.readFileSync(path.join(uiRoot, f), "utf8"), ctx, { filename: f });

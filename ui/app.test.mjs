@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { loadWorkbench, probe } from "./dom-stub.mjs";
+import { El, loadWorkbench, probe } from "./dom-stub.mjs";
 
 const UI_ROOT = fileURLToPath(new URL(".", import.meta.url));
 
@@ -26,6 +26,117 @@ async function boot() {
 }
 
 const settle = () => new Promise((r) => setImmediate(r));
+
+async function navigationBoot({ listen, navigate = async () => {}, native = true } = {}) {
+  const html = readFileSync(new URL("index.html", import.meta.url), "utf8");
+  const calls = [];
+  const tabs = [];
+  const views = [];
+  const harness = loadWorkbench(UI_ROOT, undefined, ({ window, document }) => {
+    // Derive the controls from shipped markup: Home must remain styled like a
+    // tab without becoming a local pane. This catches selector/handler collisions.
+    for (const [markup, classes, attributes] of html.matchAll(/<button class="(tab[^"]*)"([^>]*)>/g)) {
+      const id = attributes.match(/id="([^"]+)"/)?.[1];
+      const tab = id ? document.getElementById(id) : new El("button");
+      tab.className = classes;
+      tab.hidden = /\bhidden\b/.test(markup);
+      const view = attributes.match(/data-view="([^"]+)"/)?.[1];
+      if (view) tab.dataset.view = view;
+      tabs.push(tab);
+    }
+    for (const [, classes, id, page] of html.matchAll(/<section class="(view[^"]*)" id="([^"]+)" data-page="([^"]+)"/g)) {
+      const view = document.getElementById(id);
+      view.className = classes;
+      view.dataset.page = page;
+      views.push(view);
+    }
+    document.getElementById("shared-shell-error").hidden = true;
+    document.querySelectorAll = selector => selector === ".tab" ? tabs : selector === ".view" ? views : [];
+    if (native) window.__TAURI__ = {
+      core: { invoke: async command => {
+        if (command === "show_shared_shell") { calls.push(command); return navigate(); }
+        return {};
+      } },
+      event: { listen: listen ?? (async () => () => {}) },
+    };
+  });
+  await settle();
+  return { ...harness, calls, tabs, views, home: harness.document.getElementById("shared-shell-home") };
+}
+
+test("native Home preserves the current pane while waiting for owned listeners", async () => {
+  const pending = [];
+  let released = 0;
+  const h = await navigationBoot({ listen: () => new Promise(resolve => pending.push(resolve)) });
+  assert.ok(pending.length > 0);
+  h.home.click();
+  h.home.click();
+  assert.equal(h.document.getElementById("view-glance").classList.contains("active"), true);
+  assert.equal(h.home.classList.contains("active"), false);
+  assert.equal(h.home.disabled, true);
+  assert.equal(h.calls.length, 0);
+  for (const resolve of pending) resolve(() => { released++; });
+  await settle();
+  assert.equal(released, pending.length);
+  assert.deepEqual(h.calls, ["show_shared_shell"]);
+});
+
+test("native Home handles failed navigation visibly without hiding Advanced", async () => {
+  const h = await navigationBoot({ navigate: async () => { throw new Error("navigation rejected"); } });
+  h.document.getElementById("main-content").scrollTop = 800;
+  h.home.click();
+  await settle();
+  const error = h.document.getElementById("shared-shell-error");
+  assert.equal(error.hidden, false);
+  assert.match(error.textContent, /Cannot open Home/);
+  assert.equal(h.document.getElementById("main-content").scrollTop, 0);
+  assert.equal(h.home.disabled, false);
+  assert.equal(h.document.getElementById("view-glance").classList.contains("active"), true);
+  const about = h.tabs.find(tab => tab.dataset.view === "about");
+  about.click();
+  assert.equal(h.document.getElementById("view-about").classList.contains("active"), true);
+  assert.equal(h.document.getElementById("view-glance").classList.contains("active"), false);
+});
+
+test("Home cannot be blocked by a throwing or rejected listener release", async () => {
+  for (const unlisten of [() => { throw new Error("already removed"); }, () => Promise.reject(new Error("already removed"))]) {
+    const h = await navigationBoot({ listen: async () => unlisten });
+    h.home.click();
+    await settle();
+    assert.deepEqual(h.calls, ["show_shared_shell"]);
+    assert.equal(h.document.getElementById("view-glance").classList.contains("active"), true);
+  }
+});
+
+test("Home cleanup timeout is visible; late listeners still release before retry", async () => {
+  const pending = [];
+  let released = 0;
+  const h = await navigationBoot({ listen: () => new Promise(resolve => pending.push(resolve)) });
+  const before = h.timers.length;
+  h.home.click();
+  assert.equal(h.timers.length, before + 1, "Home has one bounded cleanup deadline");
+  h.timers.at(-1)();
+  await settle();
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.document.getElementById("shared-shell-error").hidden, false);
+  assert.equal(h.home.disabled, false);
+  for (const resolve of pending) resolve(() => { released++; });
+  await settle();
+  assert.equal(released, pending.length);
+  assert.equal(h.calls.length, 0, "expired attempt cannot navigate later");
+  h.home.click();
+  await settle();
+  assert.deepEqual(h.calls, ["show_shared_shell"]);
+});
+
+test("Pond keeps native Home hidden and existing legacy tabs work", async () => {
+  const h = await navigationBoot({ native: false });
+  assert.equal(h.home.hidden, true);
+  h.tabs.find(tab => tab.dataset.view === "about").click();
+  assert.equal(h.document.getElementById("view-about").classList.contains("active"), true);
+  assert.equal(h.document.getElementById("view-glance").classList.contains("active"), false);
+  assert.equal(h.calls.length, 0);
+});
 
 test("advanced navigation releases registered and late native event listeners", async () => {
   const { ctx } = await boot();

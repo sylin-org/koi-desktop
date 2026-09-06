@@ -144,6 +144,11 @@ authenticated `/ui` operator view. Advanced tools opens the retained workbench a
 its unchanged Tauri asset origin, preserving local storage and its existing
 watched-item import. Its Home button returns to the shared shell and releases
 native event listeners, including registrations that finish during navigation.
+Windows return navigation uses the registered `http://koi-ui.localhost/` origin
+(initial window setup translates the custom scheme; later navigation does not).
+Home never selects a legacy pane. Cleanup has a three-second deadline: a failure
+keeps the current pane visible with a retry/reopen message, and late registrations
+still release. Reopen restores live subscriptions after a failed return.
 The read-only Pond bundle retains its existing public projection; it does not
 receive the operator catalog.
 

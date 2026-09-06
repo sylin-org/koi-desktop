@@ -58,8 +58,23 @@ pub fn show_shared_shell(window: tauri::WebviewWindow) -> Result<(), String> {
         return Err("unknown workbench".into());
     }
     window
-        .navigate(URL.parse().expect("static shared shell URL"))
+        .navigate(
+            navigation_url(cfg!(windows))
+                .parse()
+                .expect("static shared shell URL"),
+        )
         .map_err(|_| "cannot open the shared shell".into())
+}
+
+fn navigation_url(windows: bool) -> &'static str {
+    // Initial custom-protocol setup rewrites the Windows URL, but Wry's later
+    // load_url goes straight to WebView2 Navigate. Use its registered HTTP origin
+    // here; a raw koi-ui: navigation never reaches that protocol handler.
+    if windows {
+        "http://koi-ui.localhost/"
+    } else {
+        URL
+    }
 }
 
 fn allowed(label: &str, request: &Request<Vec<u8>>) -> bool {
@@ -119,6 +134,20 @@ mod tests {
             "/",
         ] {
             assert!(!allowed(crate::MAIN_WINDOW, &request("GET", url)), "{url}");
+        }
+    }
+
+    #[test]
+    fn return_navigation_uses_the_platform_registered_protocol_origin() {
+        for (windows, scheme, host) in [
+            (true, "http", "koi-ui.localhost"),
+            (false, "koi-ui", "localhost"),
+        ] {
+            let url = navigation_url(windows);
+            let parsed: tauri::Url = url.parse().unwrap();
+            assert_eq!(parsed.scheme(), scheme);
+            assert_eq!(parsed.host_str(), Some(host));
+            assert!(allowed(crate::MAIN_WINDOW, &request("GET", url)));
         }
     }
 
