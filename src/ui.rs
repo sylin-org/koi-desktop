@@ -15,6 +15,12 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
             responder.respond(response(StatusCode::NOT_FOUND, String::new()));
             return;
         }
+        if crate::browser_access::handles(&request) {
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(crate::browser_access::handle(request))
+            });
+            return;
+        }
         if request.uri().path() == "/refresh.js" {
             let mut reply = response(StatusCode::OK, koi_ui::REFRESH_JS.into());
             reply.headers_mut().insert(
@@ -66,6 +72,7 @@ fn links() -> Links<'static> {
     Links {
         refresh: Some("./"),
         advanced: ADVANCED_URL,
+        browser_access: Some("/web"),
     }
 }
 
@@ -110,6 +117,9 @@ fn allowed(label: &str, request: &Request<Vec<u8>>) -> bool {
         ),
         (Some("koi-ui"), Some("localhost")) | (Some("http"), Some("koi-ui.localhost"))
     );
+    if label == crate::MAIN_WINDOW && local_origin && crate::browser_access::handles(request) {
+        return crate::browser_access::allowed(request);
+    }
     label == crate::MAIN_WINDOW
         && request.method() == Method::GET
         && local_origin

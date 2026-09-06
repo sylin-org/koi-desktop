@@ -187,3 +187,19 @@ live in Koi's `crates/koi-ui/README.md`. Install through the native package reci
 before collecting deployment evidence; keep a fresh exact prior package and an
 interruption-safe recovery guard. Historical renderer experiments remain
 reproducible at their immutable commits, not as an alternative product mode.
+
+
+### Browser access (development source)
+
+Home's **Browser access** opens native controls for local browser access, private
+phone QR invitations, and disconnecting named browsers. **Open in browser** uses a
+one-use local handoff; no daemon token is copied. Private phone access is optional
+and waits for usable CertMesh HTTPS identity. The phone must resolve the name and
+trust its issuer normally. Public Pond remains separate. Browser sessions can view
+services only. Temporary access lasts for the tab (up to 12 hours); remembered
+access lasts up to 30 days. Disable revokes all grants.
+
+The daemon owns settings, invitations, session grants and readiness; native code only
+adapts authenticated local control and shared Rust rendering. The client/UI pins
+must refer to the same Koi revision implementing ADR-046. Older installed daemons
+report the controls unavailable; this source change is not installed acceptance.

@@ -18,8 +18,8 @@ tauri-plugin-notification = "=2.3.1"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 base64 = "0.22"
 qrcode = "0.14"
-koi-client = { git = "https://github.com/sylin-org/koi", rev = "17fb591148c8c93f97a8db6322018f6847a456d5" }
-koi-ui = { git = "https://github.com/sylin-org/koi", rev = "17fb591148c8c93f97a8db6322018f6847a456d5" }
+koi-client = { git = "https://github.com/sylin-org/koi", rev = "c5c3d5086c0d91a94010866846ef33a2c2785966" }
+koi-ui = { git = "https://github.com/sylin-org/koi", rev = "c5c3d5086c0d91a94010866846ef33a2c2785966" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Same native library family/versions already selected by the pinned Tauri shell.
