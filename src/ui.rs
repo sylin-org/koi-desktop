@@ -7,12 +7,21 @@ use tauri::Manager;
 
 const SCHEME: &str = "koi-ui";
 pub const URL: &str = "koi-ui://localhost/";
-const CSP: &str = koi_ui::DOCUMENT_CSP;
+const CSP: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder.register_asynchronous_uri_scheme_protocol(SCHEME, |context, request, responder| {
         if !allowed(context.webview_label(), &request) {
             responder.respond(response(StatusCode::NOT_FOUND, String::new()));
+            return;
+        }
+        if request.uri().path() == "/refresh.js" {
+            let mut reply = response(StatusCode::OK, koi_ui::REFRESH_JS.into());
+            reply.headers_mut().insert(
+                "content-type",
+                "text/javascript; charset=utf-8".parse().unwrap(),
+            );
+            responder.respond(reply);
             return;
         }
         // Never block the webview thread on local-control I/O. The existing client
@@ -36,7 +45,13 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
                     koi_ui::render_home(View::Unavailable, links, &query),
                 ),
             };
-            responder.respond(response(status, document));
+            responder.respond(response(
+                status,
+                document.replace(
+                    "</head>",
+                    "<script defer src=\"/refresh.js\"></script></head>",
+                ),
+            ));
         });
     })
 }
@@ -98,8 +113,11 @@ fn allowed(label: &str, request: &Request<Vec<u8>>) -> bool {
     label == crate::MAIN_WINDOW
         && request.method() == Method::GET
         && local_origin
-        && uri.path() == "/"
-        && koi_ui::home::HomeRequest::parse(uri.query().unwrap_or("")).is_ok()
+        && match uri.path() {
+            "/" => koi_ui::home::HomeRequest::parse(uri.query().unwrap_or("")).is_ok(),
+            "/refresh.js" => uri.query().is_none(),
+            _ => false,
+        }
         && request.body().is_empty()
 }
 
@@ -165,6 +183,14 @@ mod tests {
     fn only_exact_native_shared_shell_roots_are_allowed() {
         for url in [URL, "http://koi-ui.localhost/"] {
             assert!(allowed(crate::MAIN_WINDOW, &request("GET", url)));
+            assert!(allowed(
+                crate::MAIN_WINDOW,
+                &request("GET", &format!("{url}refresh.js"))
+            ));
+            assert!(!allowed(
+                crate::MAIN_WINDOW,
+                &request("GET", &format!("{url}refresh.js?path=secret"))
+            ));
             assert!(allowed(
                 crate::MAIN_WINDOW,
                 &request(

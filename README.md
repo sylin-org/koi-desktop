@@ -130,15 +130,17 @@ restores an enabled intent and continues reconciliation.
 ### Shared Rust shell
 
 Normal launch and autostart use the production Maud shell in `koi-ui`, pinned
-alongside `koi-client` to Koi `267be185297671d4f4892e99c7ec3ef040b8df73`.
+alongside `koi-client` to Koi `d096f28b45e46f6b539c1716b7bd36ddc8a800b4`.
 No sibling checkout or renderer-selection flag is needed. The existing singleton,
 tray, authenticated local-control handoff and native motion boundary are retained.
 
 The internal `koi-ui` protocol admits only the exact main-window root and bounded
-search/favorite/selection query fields. Rust reads
+search/favorite/selection query fields, plus its embedded `/refresh.js` asset. Rust reads
 one schema-checked authenticated catalog, renders a dated snapshot and embeds its
-original assets. Refresh rereads the complete snapshot with submitted filters and
-selection intact. No additional HTTP listener
+original assets. A credential-free DOM adapter rereads complete Rust-rendered snapshots
+five seconds after successful reads, preserving filters, selection and unsent drafts.
+Temporary failure marks retained evidence stale, disables old Open links and retries
+with bounded backoff; page exit aborts/fences the reader. No additional HTTP listener
 or desktop credential in JavaScript. A failed read is unavailable, never empty.
 
 Home / Devices / Settings / About share Rust components with the daemon's
@@ -159,7 +161,8 @@ that the remote page is reachable or trusted. Home now supports submitted search
 favorite filtering, stable selection and wide/narrow service details. Its inspectable
 Open links are intercepted at native navigation and cannot replace the privileged
 workbench with a remote page. API-only/absent services retain connection details.
-Automatic updates/reconnect and installed journey acceptance remain R07 work.
+Automatic snapshot refresh/reconnect is implemented; installed journey acceptance
+remains R07 work. This is polling, not a second catalog event/state model.
 The read-only Pond bundle retains its existing public projection; it does not
 receive the operator catalog.
 
