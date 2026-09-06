@@ -130,7 +130,7 @@ restores an enabled intent and continues reconciliation.
 ### Shared Rust shell
 
 Normal launch and autostart use the production Maud shell in `koi-ui`, pinned
-alongside `koi-client` to Koi `d096f28b45e46f6b539c1716b7bd36ddc8a800b4`.
+alongside `koi-client` to Koi `46206b00511fddea33de2ad58a9a2651747d78ec`.
 No sibling checkout or renderer-selection flag is needed. The existing singleton,
 tray, authenticated local-control handoff and native motion boundary are retained.
 
