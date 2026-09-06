@@ -8,6 +8,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod external;
 mod local_daemon;
 #[cfg(target_os = "linux")]
 mod native_motion;
@@ -1395,33 +1396,10 @@ fn probe_http_blocking(host: String, port: u16) -> Result<Option<String>, String
 /// Passage (cycle-1 WP7): open a pond endpoint in the default browser.
 /// Only http(s) passes — an mDNS announcement never gets to execute anything.
 #[tauri::command]
-fn open_url(url: String) -> Result<(), String> {
-    let url = url.trim();
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err("only http(s) URLs can be opened".into());
-    }
-    #[cfg(windows)]
-    {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn()
-            .map_err(|e| format!("could not open {url}: {e}"))?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(url)
-            .spawn()
-            .map_err(|e| format!("could not open {url}: {e}"))?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(url)
-            .spawn()
-            .map_err(|e| format!("could not open {url}: {e}"))?;
-    }
-    Ok(())
+async fn open_url(url: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || external::open(&url))
+        .await
+        .map_err(|_| "native browser launcher failed".to_string())?
 }
 
 // ── Trust pane (cycle-1 WP6): the certmesh doors ────────────────────

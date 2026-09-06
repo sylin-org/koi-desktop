@@ -2099,7 +2099,7 @@ dependencies = [
 [[package]]
 name = "koi-client"
 version = "1.0.0-dev.0"
-source = "git+https://github.com/sylin-org/koi?rev=b4c32fa9b524549509b34b01bb24cc06455407ad#b4c32fa9b524549509b34b01bb24cc06455407ad"
+source = "git+https://github.com/sylin-org/koi?rev=738654eb12e58deb2554dd394c804c0af61b420e#738654eb12e58deb2554dd394c804c0af61b420e"
 dependencies = [
  "hickory-proto",
  "koi-common",
@@ -2113,7 +2113,7 @@ dependencies = [
 [[package]]
 name = "koi-common"
 version = "1.0.0-dev.0"
-source = "git+https://github.com/sylin-org/koi?rev=b4c32fa9b524549509b34b01bb24cc06455407ad#b4c32fa9b524549509b34b01bb24cc06455407ad"
+source = "git+https://github.com/sylin-org/koi?rev=738654eb12e58deb2554dd394c804c0af61b420e#738654eb12e58deb2554dd394c804c0af61b420e"
 dependencies = [
  "async-trait",
  "axum",
@@ -2133,7 +2133,7 @@ dependencies = [
 [[package]]
 name = "koi-config"
 version = "1.0.0-dev.0"
-source = "git+https://github.com/sylin-org/koi?rev=b4c32fa9b524549509b34b01bb24cc06455407ad#b4c32fa9b524549509b34b01bb24cc06455407ad"
+source = "git+https://github.com/sylin-org/koi?rev=738654eb12e58deb2554dd394c804c0af61b420e#738654eb12e58deb2554dd394c804c0af61b420e"
 dependencies = [
  "koi-common",
  "serde",
@@ -2161,16 +2161,18 @@ dependencies = [
  "tauri-plugin-notification",
  "ureq",
  "webkit2gtk",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "koi-ui"
 version = "1.0.0-dev.0"
-source = "git+https://github.com/sylin-org/koi?rev=b4c32fa9b524549509b34b01bb24cc06455407ad#b4c32fa9b524549509b34b01bb24cc06455407ad"
+source = "git+https://github.com/sylin-org/koi?rev=738654eb12e58deb2554dd394c804c0af61b420e#738654eb12e58deb2554dd394c804c0af61b420e"
 dependencies = [
  "base64 0.22.1",
  "koi-common",
  "maud",
+ "url",
 ]
 
 [[package]]

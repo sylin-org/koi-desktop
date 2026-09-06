@@ -149,6 +149,13 @@ Windows return navigation uses the registered `http://koi-ui.localhost/` origin
 Home never selects a legacy pane. Cleanup has a three-second deadline: a failure
 keeps the current pane visible with a retry/reopen message, and late registrations
 still release. Reopen restores live subscriptions after a failed return.
+External Open validates a complete HTTP(S) URL without embedded credentials,
+control characters or ambiguous authority syntax. Windows invokes the native
+browser association directly, never a command interpreter; Linux/macOS pass one
+URL argument to their native launcher. Acceptance by a launcher is not a promise
+that the remote page is reachable or trusted. R07's shared search/selection and
+destination helpers are present, but interactive Home/reconnect wiring remains
+in progress; this foundation update does not claim those controls are available.
 The read-only Pond bundle retains its existing public projection; it does not
 receive the operator catalog.
 
