@@ -10,9 +10,20 @@ pub const URL: &str = "koi-ui://localhost/";
 const CSP: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-    builder.register_asynchronous_uri_scheme_protocol(SCHEME, |context, request, responder| {
+    let comparisons = crate::comparison::Store::default();
+    builder.register_asynchronous_uri_scheme_protocol(SCHEME, move |context, request, responder| {
         if !allowed(context.webview_label(), &request) {
             responder.respond(response(StatusCode::NOT_FOUND, String::new()));
+            return;
+        }
+        if request.uri().path() == "/compare" {
+            let peer = comparison_peer(&request).expect("validated comparison intent");
+            let status = if comparisons.start(peer) {
+                StatusCode::ACCEPTED
+            } else {
+                StatusCode::CONFLICT
+            };
+            responder.respond(response(status, String::new()));
             return;
         }
         if request.uri().path() == "/refresh.js" {
@@ -26,6 +37,7 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
         }
         // Never block the webview thread on local-control I/O. The existing client
         // owns discovery, authentication, timeouts and schema validation.
+        let comparisons = comparisons.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let intent = koi_ui::home::HomeRequest::parse(request.uri().query().unwrap_or(""))
                 .expect("allowed request validated Home intent");
@@ -38,7 +50,12 @@ pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wr
             let (status, document) = match read_catalog() {
                 Ok(catalog) => (
                     StatusCode::OK,
-                    koi_ui::render_home(View::Snapshot(&catalog), links, &query),
+                    koi_ui::render_workbench(
+                        View::Snapshot(&catalog),
+                        links,
+                        &query,
+                        &comparisons.view(query.peer),
+                    ),
                 ),
                 Err(_) => (
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -77,16 +94,20 @@ fn read_catalog() -> Result<koi_ui::CatalogSnapshot, String> {
 }
 
 #[tauri::command]
-pub fn show_shared_shell(window: tauri::WebviewWindow) -> Result<(), String> {
+pub fn show_shared_shell(
+    window: tauri::WebviewWindow,
+    section: Option<String>,
+) -> Result<(), String> {
     if window.label() != crate::MAIN_WINDOW {
         return Err("unknown workbench".into());
     }
+    let destination = match section.as_deref() {
+        None => navigation_url(cfg!(windows)).to_string(),
+        Some("comparison") => format!("{}#comparison", navigation_url(cfg!(windows))),
+        _ => return Err("unknown shared shell section".into()),
+    };
     window
-        .navigate(
-            navigation_url(cfg!(windows))
-                .parse()
-                .expect("static shared shell URL"),
-        )
+        .navigate(destination.parse().expect("static shared shell URL"))
         .map_err(|_| "cannot open the shared shell".into())
 }
 
@@ -111,14 +132,35 @@ fn allowed(label: &str, request: &Request<Vec<u8>>) -> bool {
         (Some("koi-ui"), Some("localhost")) | (Some("http"), Some("koi-ui.localhost"))
     );
     label == crate::MAIN_WINDOW
-        && request.method() == Method::GET
         && local_origin
         && match uri.path() {
-            "/" => koi_ui::home::HomeRequest::parse(uri.query().unwrap_or("")).is_ok(),
-            "/refresh.js" => uri.query().is_none(),
+            "/" => {
+                request.method() == Method::GET
+                    && request.body().is_empty()
+                    && koi_ui::home::HomeRequest::parse(uri.query().unwrap_or("")).is_ok()
+            }
+            "/refresh.js" => {
+                request.method() == Method::GET
+                    && request.body().is_empty()
+                    && uri.query().is_none()
+            }
+            "/compare" => comparison_peer(request).is_some(),
             _ => false,
         }
-        && request.body().is_empty()
+}
+
+fn comparison_peer(request: &Request<Vec<u8>>) -> Option<koi_ui::devices::DeviceId> {
+    if request.method() != Method::POST
+        || request.uri().query().is_some()
+        || request.body().len() > 512
+    {
+        return None;
+    }
+    let body = std::str::from_utf8(request.body()).ok()?;
+    if !body.starts_with("peer=") || body.contains('&') {
+        return None;
+    }
+    koi_ui::home::HomeRequest::parse(body).ok()?.peer
 }
 
 /// Keep real service URLs inspectable while opening them outside the workbench.
@@ -258,6 +300,30 @@ mod tests {
         let mut body = request("GET", URL);
         body.body_mut().push(1);
         assert!(!allowed(crate::MAIN_WINDOW, &body));
+    }
+
+    #[test]
+    fn comparison_action_accepts_only_bounded_peer_intent_on_the_native_origin() {
+        let mut action = request("POST", "koi-ui://localhost/compare");
+        *action.body_mut() = b"peer=office".to_vec();
+        assert!(allowed(crate::MAIN_WINDOW, &action));
+        assert!(!allowed("other", &action));
+        assert!(!allowed(
+            crate::MAIN_WINDOW,
+            &request("GET", "koi-ui://localhost/compare")
+        ));
+        for body in [
+            "peer=",
+            "peer=office&path=/etc/passwd",
+            "peer=office&peer=other",
+            "path=/x",
+            "peer=UPPER",
+        ] {
+            *action.body_mut() = body.as_bytes().to_vec();
+            assert!(!allowed(crate::MAIN_WINDOW, &action), "{body}");
+        }
+        *action.body_mut() = format!("peer={}", "x".repeat(512)).into_bytes();
+        assert!(!allowed(crate::MAIN_WINDOW, &action));
     }
 
     #[test]

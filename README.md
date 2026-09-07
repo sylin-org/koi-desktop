@@ -23,7 +23,7 @@ workbench are three doors into the same pond.
 ## Status
 
 The workbench is functional on Windows and glibc Linux: singleton lifecycle,
-tray reveal, login startup, live status/events, discovery/browser/diff, DNS,
+tray reveal, login startup, live status/events, discovery and device comparison, DNS,
 trust, capability glass, and read-only Pond publishing. Version 0.1.3 asks the
 daemon to arm its narrow LAN adapter and renders only the URL backed by the
 daemon's real socket and host-policy assessment; the full operator API remains
@@ -135,7 +135,8 @@ No sibling checkout or renderer-selection flag is needed. The existing singleton
 tray, authenticated local-control handoff and native motion boundary are retained.
 
 The internal `koi-ui` protocol admits only the exact main-window root and bounded
-search/favorite/selection query fields, plus its embedded `/refresh.js` asset. Rust reads
+search/favorite/selection/peer query fields, its embedded `/refresh.js` asset, and
+a bounded `/compare` POST containing only a selected DeviceId. Rust reads
 one schema-checked authenticated catalog, renders a dated snapshot and embeds its
 original assets. A credential-free DOM adapter rereads complete Rust-rendered snapshots
 five seconds after successful reads, preserving filters, selection and unsent drafts.
@@ -187,3 +188,20 @@ live in Koi's `crates/koi-ui/README.md`. Install through the native package reci
 before collecting deployment evidence; keep a fresh exact prior package and an
 interruption-safe recovery guard. Historical renderer experiments remain
 reproducible at their immutable commits, not as an alternative product mode.
+
+### Devices and comparison
+
+Devices groups the shared catalog by opaque device identity, marks this computer
+explicitly, and links hosted services to their existing Home details. Discovery and
+joined CertMesh identity are separate facts. Counts include the whole snapshot,
+including retained unavailable services, independently of Home filters.
+
+“Compare what devices can see” is available in Devices and Advanced → Status.
+Choose a discovered Koi peer, then start a read. The native adapter retains one
+in-memory result and resolves its endpoint from the current catalog. It never sends
+local authority to a peer. Missing/refused/slow/unsupported reads and incompatible
+query coverage stay incomplete; two readable snapshots with matching mDNS query
+scope can report agreement or differences, including changed endpoint/TXT details.
+Observer labels and local receipt times accompany the result. Physical interface and
+same-network equivalence are not reported. No browser listener or firewall change
+is part of comparison. The legacy Diff UI and manual node list are retired.

@@ -10,6 +10,7 @@ build = "build.rs"
 
 [dependencies]
 anyhow = "1"
+chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "=2.11.5", features = ["image-png", "tray-icon"] }
@@ -18,8 +19,8 @@ tauri-plugin-notification = "=2.3.1"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 base64 = "0.22"
 qrcode = "0.14"
-koi-client = { git = "https://github.com/sylin-org/koi", rev = "34e0d8c30a1524189e35608bec2a1880e65667ce" }
-koi-ui = { git = "https://github.com/sylin-org/koi", rev = "34e0d8c30a1524189e35608bec2a1880e65667ce" }
+koi-client = { git = "https://github.com/sylin-org/koi", rev = "d9fe7365c24030c978bd9964817df436adb7a697" }
+koi-ui = { git = "https://github.com/sylin-org/koi", rev = "d9fe7365c24030c978bd9964817df436adb7a697" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Same native library family/versions already selected by the pinned Tauri shell.

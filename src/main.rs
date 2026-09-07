@@ -8,6 +8,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod comparison;
 mod external;
 mod local_daemon;
 #[cfg(target_os = "linux")]
@@ -96,7 +97,6 @@ fn run() -> Result<()> {
                 service_start,
                 service_stop,
                 daemon_run_once,
-                daemon_get,
                 pond_publish_ui,
                 pond_disable,
                 pond_qr_svg,
@@ -239,56 +239,6 @@ fn get_local_json(
         .into_string()
         .ok()?;
     serde_json::from_str(&text).ok()
-}
-
-/// GET a validated URL and return the body, or the honest reason it refused:
-/// non-2xx daemons answer with a JSON error (`capability_disabled`, …) that
-/// names the cause — the pane shows the daemon's own words, never "no data".
-fn get_json_or_reason(agent: &ureq::Agent, url: String) -> Result<serde_json::Value, String> {
-    match agent.get(&url).call() {
-        Ok(response) => {
-            let body = response
-                .into_string()
-                .map_err(|e| format!("{url}: unreadable body: {e}"))?;
-            serde_json::from_str(&body).map_err(|e| format!("{url}: malformed body: {e}"))
-        }
-        Err(ureq::Error::Status(code, response)) => {
-            let reason = response
-                .into_string()
-                .unwrap_or_else(|_| "no body".to_string());
-            Err(format!(
-                "{url}: {code}: {}",
-                reason.chars().take(300).collect::<String>()
-            ))
-        }
-        Err(e) => Err(format!("{url}: {e}")),
-    }
-}
-
-/// Read-only GET against any node's daemon (cycle-1 WP0): the cross-host
-/// browser and future scope views read sibling daemons' declared state. GETs
-/// are the LAN-readable surface by design; mutations never ride this command.
-fn validate_daemon_get(address: &str, port: u16, path: &str) -> Result<String, String> {
-    if address.trim().is_empty() || address.contains(['/', '\\', ' ', ':']) {
-        return Err("daemon address looks wrong".into());
-    }
-    if !(1..=65535).contains(&port) {
-        return Err("daemon port out of range".into());
-    }
-    if !path.starts_with('/') || path.contains([' ', '\t', '\r', '\n']) || path.contains("..") {
-        return Err("daemon path looks wrong".into());
-    }
-    Ok(format!("http://{address}:{port}{path}"))
-}
-
-/// ASYNC + spawn_blocking: a remote peer can take seconds to answer (or
-/// never), and sync commands hold the main thread.
-#[tauri::command]
-async fn daemon_get(address: String, port: u16, path: String) -> Result<serde_json::Value, String> {
-    let url = validate_daemon_get(&address, port, &path)?;
-    tauri::async_runtime::spawn_blocking(move || get_json_or_reason(&daemon_agent(), url))
-        .await
-        .map_err(|e| format!("daemon_get task: {e}"))?
 }
 
 const UI_POKE_PORT: u16 = 5640;
@@ -2244,21 +2194,6 @@ mod cycle1_guards {
     }
 
     #[test]
-    fn cross_host_get_refuses_nonsense() {
-        assert!(
-            super::validate_daemon_get("192.168.1.44", 16541, "/v1/mdns/browser/snapshot",).is_ok()
-        );
-        assert!(super::validate_daemon_get("", 16541, "/x").is_err());
-        assert!(super::validate_daemon_get("192.168.1.44/x", 16541, "/x").is_err());
-        assert!(super::validate_daemon_get("192.168.1.44", 0, "/x").is_err());
-        assert!(super::validate_daemon_get("192.168.1.44", 16541, "v1/x").is_err());
-        assert!(super::validate_daemon_get("192.168.1.44", 16541, "/x y").is_err());
-        let traversal = ["/x", "..", "y"].join("/");
-        assert!(traversal.contains(".."));
-        assert!(super::validate_daemon_get("192.168.1.44", 16541, &traversal).is_err());
-    }
-
-    #[test]
     fn hyprland_autostart_preserves_user_config_and_round_trips() {
         let original = "-- Extra autostart processes.\no.launch_on_start(\"keep-me\")\n";
         let executable = std::path::Path::new("/opt/Koi pond/koi-desktop");
@@ -2302,50 +2237,5 @@ mod cycle1_guards {
             std::path::Path::new("/usr/bin/koi-desktop"),
         )
         .is_err());
-    }
-
-    /// Live acceptance (WP0): a sibling daemon's browse snapshot is reachable
-    /// with the exact command the workbench uses. Ignored by default; run
-    /// with `cargo test -- --ignored` while the LAN is up.
-    #[test]
-    #[ignore]
-    fn cross_host_get_reaches_brook() {
-        // Live acceptance (WP0): a sibling daemon answers the exact GET the
-        // workbench uses - either with its browse snapshot (browser mounted)
-        // or with a DECLARED capability skip (ADR-035: honest degradation).
-        // Both prove the per-node read; silence is the only failure. ureq
-        // wraps non-2xx inside Err(Status(code, response)), so both branches
-        // carry a parseable body. Ignored by default; run with
-        // `cargo test -- --ignored` while the LAN is up.
-        let target = super::validate_daemon_get("192.168.1.44", 5641, "/v1/mdns/browser/snapshot")
-            .expect("target should validate");
-        let response = super::daemon_agent().get(&target).call();
-        let (code, text) = match response {
-            Ok(response) => {
-                let code = response.status();
-                let text = response
-                    .into_string()
-                    .expect("sibling response should be text");
-                (code, text)
-            }
-            Err(ureq::Error::Status(code, response)) => {
-                let text = response.into_string().unwrap_or_default();
-                (code, text)
-            }
-            Err(e) => panic!("transport: {e}"),
-        };
-        let body: serde_json::Value =
-            serde_json::from_str(text.trim()).unwrap_or(serde_json::json!({}));
-        match code {
-            200 => assert!(
-                body.get("instances").is_some(),
-                "snapshot should carry instances"
-            ),
-            503 => assert_eq!(
-                body["error"], "capability_disabled",
-                "a declared skip is the only acceptable non-200: {body}"
-            ),
-            other => panic!("unexpected status {other}: {text}"),
-        }
     }
 }
