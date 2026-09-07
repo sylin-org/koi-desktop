@@ -8,7 +8,6 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod browser_access;
 mod external;
 mod local_daemon;
 #[cfg(target_os = "linux")]

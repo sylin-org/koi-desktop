@@ -143,8 +143,8 @@ Temporary failure marks retained evidence stale, disables old Open links and ret
 with bounded backoff; page exit aborts/fences the reader. No additional HTTP listener
 or desktop credential in JavaScript. A failed read is unavailable, never empty.
 
-Home / Devices / Settings / About share Rust components with the daemon's
-authenticated `/ui` operator view. Advanced tools opens the retained workbench at
+Home / Devices / Settings / About use the shared Rust components. Browser access
+and phone pairing are parked; the workbench is the Home entry point. Advanced tools opens the retained workbench at
 its unchanged Tauri asset origin, preserving local storage and its existing
 watched-item import. Its Home button returns to the shared shell and releases
 native event listeners, including registrations that finish during navigation.
@@ -187,19 +187,3 @@ live in Koi's `crates/koi-ui/README.md`. Install through the native package reci
 before collecting deployment evidence; keep a fresh exact prior package and an
 interruption-safe recovery guard. Historical renderer experiments remain
 reproducible at their immutable commits, not as an alternative product mode.
-
-
-### Browser access (development source)
-
-Home's **Browser access** opens native controls for local browser access, private
-phone QR invitations, and disconnecting named browsers. **Open in browser** uses a
-one-use local handoff; no daemon token is copied. Private phone access is optional
-and waits for usable CertMesh HTTPS identity. The phone must resolve the name and
-trust its issuer normally. Public Pond remains separate. Browser sessions can view
-services only. Temporary access lasts for the tab (up to 12 hours); remembered
-access lasts up to 30 days. Disable revokes all grants.
-
-The daemon owns settings, invitations, session grants and readiness; native code only
-adapts authenticated local control and shared Rust rendering. The client/UI pins
-must refer to the same Koi revision implementing ADR-046. Older installed daemons
-report the controls unavailable; this source change is not installed acceptance.

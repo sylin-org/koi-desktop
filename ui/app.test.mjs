@@ -1,4 +1,3 @@
-import './browser-access-status.test.mjs';
 // Workbench JS tests (cycle 1): the feed, the Status hero admission, the
 // At-a-glance page, and the sentence registry — the pure layers, exercised
 // in a DOM stub without a browser. Run: node --test ui/app.test.mjs
