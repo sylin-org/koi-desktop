@@ -1,4 +1,4 @@
-/* Observe authoritative connection count/readiness; never retain invitations. */
+/* Observe authoritative browser settings and grants; never retain invitations. */
 (() => {
   const panel = document.getElementById('browser-access');
   if (!panel) return;
@@ -10,7 +10,7 @@
       if (!stopped && response.ok) {
         const status = await response.json();
         if (stopped) return;
-        if (!dirty && (String(status.sessions.length) !== panel.dataset.sessions || String(status.phone_ready) !== panel.dataset.ready)) {
+        if (!dirty && JSON.stringify(status) !== panel.dataset.status) {
           location.replace('/web'); return;
         }
       }

@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 const source = readFileSync(new URL('./browser-access-status.js', import.meta.url), 'utf8');
-function harness(fetcher = async () => ({ ok: true, json: async () => ({sessions: [], phone_ready: false}) })) {
+const baseline = {settings: {enabled: false, phone: false}, sessions: [], phone_ready: false};
+function harness(fetcher = async () => ({ ok: true, json: async () => baseline }), initial = baseline) {
   const timers = new Map(), events = {}, edits = {}, visits = [];
   let id = 0;
   const context = {
-    document: { getElementById: () => ({ dataset: {sessions: '0', ready: 'false'}, querySelector: () => ({ addEventListener: (type, cb) => { edits[type] = cb; } }) }) },
+    document: { getElementById: () => ({ dataset: {status: JSON.stringify(initial)}, querySelector: () => ({ addEventListener: (type, cb) => { edits[type] = cb; } }) }) },
     window: { addEventListener: (type, cb) => { events[type] = cb; } },
     location: { replace: path => visits.push(path) },
     fetch: fetcher, AbortSignal,
@@ -36,4 +37,17 @@ test('leaving prevents late status navigation; restored pages resume observation
 test('failed native observation retains the current page and retries', async () => {
   const h = harness(async () => { throw new Error('Daemon restarting'); }); await h.tick();
   assert.deepEqual(h.visits, []); assert.equal(h.timers.size, 1);
+});
+
+test('CLI settings changes update native controls even with unchanged count/readiness', async () => {
+  const h = harness(async () => ({ok: true, json: async () => ({...baseline, settings: {enabled: true, phone: false}})}));
+  await h.tick(); assert.deepEqual(h.visits, ['/web']);
+});
+test('replacing a grant at the same count updates the displayed disconnect target', async () => {
+  const initial = {...baseline, sessions: [{id: 'prior'}]};
+  const h = harness(async () => ({ok: true, json: async () => ({...initial, sessions: [{id: 'replacement'}]})}), initial);
+  await h.tick(); assert.deepEqual(h.visits, ['/web']);
+});
+test('unchanged authoritative status keeps the native page in place', async () => {
+  const h = harness(); await h.tick(); assert.deepEqual(h.visits, []); assert.equal(h.timers.size, 1);
 });
